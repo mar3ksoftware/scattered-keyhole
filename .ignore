@@ -1,6 +1,7 @@
-# BEGIN local worktrees
+# BEGIN local metadata
 !.slim/
 !.slim/worktrees.json
 !.slim/worktrees/
 !.slim/worktrees/**
-# END local worktrees
+!.slim/roadmap.md
+# END local metadata

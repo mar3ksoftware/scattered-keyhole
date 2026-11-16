@@ -10,7 +10,8 @@ dist/
 .omo/
 .playwright-mcp/
 
-# BEGIN local worktrees
+# BEGIN local metadata
 .slim/worktrees/
 .slim/worktrees.json
-# END local worktrees
+.slim/roadmap.md
+# END local metadata
