@@ -130,6 +130,8 @@ export type GroupMember = {
 export type GroupInfo = {
   readonly groupId: GroupId;
   readonly name: string;
+  readonly description: string;
+  readonly disappearing: number;
   readonly members: readonly GroupMember[];
   readonly createdBy: UserId;
   readonly createdAt: number;
@@ -299,6 +301,54 @@ export type PollClosedPayload = {
   readonly groupId?: string;
 };
 
+// ── Tier-3 payloads ───────────────────────────────────────────────────
+
+export type GroupUpdatePayload = {
+  readonly groupId: string;
+  readonly name?: string;
+  readonly description?: string;
+};
+
+// Full-state apply: both fields travel together so clients overwrite the
+// pair and ignore groups they do not know.
+export type GroupUpdatedPayload = {
+  readonly groupId: string;
+  readonly name: string;
+  readonly description: string;
+  readonly u: string;
+  readonly timestamp: number;
+};
+
+export type MessagePinPayload = {
+  readonly to?: string;
+  readonly groupId?: string;
+  readonly targetId: string;
+  readonly pinned: boolean;
+};
+
+export type MessagePinnedPayload = {
+  readonly targetId: string;
+  readonly pinned: boolean;
+  readonly u: string;
+  readonly to?: string;
+  readonly groupId?: string;
+};
+
+export type DisappearingSetPayload = {
+  readonly to?: string;
+  readonly groupId?: string;
+  readonly seconds: number;
+};
+
+// `u` rides relays (the acting username); the join-time heal emit carries
+// only the timer and the peer, so clients must treat `u` as optional.
+export type DisappearingChangedPayload = {
+  readonly seconds: number;
+  readonly u?: string;
+  readonly to?: string;
+  readonly groupId?: string;
+};
+
 // ── Discriminated unions ──────────────────────────────────────────────
 
 export type ValidationResult<T> =
@@ -358,7 +408,9 @@ export const CONSTANTS = {
   MIN_PIN_LENGTH: 4,
   MAX_PIN_LENGTH: 6,
   MAX_GROUP_NAME_LENGTH: 50,
+  MAX_GROUP_DESCRIPTION_LENGTH: 256,
   MAX_GROUP_MEMBERS: 50,
+  DISAPPEARING_PRESETS: [0, 86400, 604800, 2592000],
   KICK_VOTE_TTL_MS: 60_000,
   MAX_MEDIA_BYTES: 16 * 1024 * 1024,
   MAX_MEDIA_TOTAL_BYTES: 512 * 1024 * 1024,
@@ -391,10 +443,13 @@ export const EVENTS = {
     USER_REGISTER: 'user:register',
     USER_LOGIN: 'user:login',
     GROUP_CREATE: 'group:create',
+    GROUP_UPDATE: 'group:update',
     GROUP_MEMBER_ADD: 'group:member:add',
     GROUP_MEMBER_REMOVE: 'group:member:remove',
     GROUP_KICK_VOTE: 'group:kick:vote',
     GROUP_MESSAGE_SEND: 'group:message:send',
+    MESSAGE_PIN: 'message:pin',
+    DISAPPEARING_SET: 'disappearing:set',
   },
   SERVER: {
     USER_JOINED: 'user:joined',
@@ -420,12 +475,15 @@ export const EVENTS = {
     LOGIN_ERROR: 'login_error',
     GROUP_CREATED: 'group:created',
     GROUP_CREATED_ERROR: 'group:created_error',
+    GROUP_UPDATED: 'group:updated',
     GROUP_MESSAGE: 'group:message',
     GROUP_MESSAGE_DELIVERY_FAILED: 'group:message_delivery_failed',
     USERS_DIRECTORY: 'users:directory',
     GROUP_MEMBER_REMOVED: 'group:member:removed',
     GROUP_KICK_TALLY: 'group:kick:tally',
     MEDIA_TOKEN: 'media:token',
+    MESSAGE_PINNED: 'message:pinned',
+    DISAPPEARING_CHANGED: 'disappearing:changed',
   },
 } as const;
 
@@ -455,6 +513,7 @@ export type ServerToClientEvents = {
   ) => void;
   readonly [EVENTS.SERVER.GROUP_CREATED]: (group: GroupInfo) => void;
   readonly [EVENTS.SERVER.GROUP_CREATED_ERROR]: (payload: GroupErrorPayload) => void;
+  readonly [EVENTS.SERVER.GROUP_UPDATED]: (payload: GroupUpdatedPayload) => void;
   readonly [EVENTS.SERVER.GROUP_MESSAGE]: (message: GroupMessage) => void;
   readonly [EVENTS.SERVER.GROUP_MESSAGE_DELIVERY_FAILED]: (payload: GroupErrorPayload) => void;
   readonly [EVENTS.SERVER.USERS_DIRECTORY]: (usernames: readonly string[]) => void;
@@ -469,6 +528,8 @@ export type ServerToClientEvents = {
   readonly [EVENTS.SERVER.POLL_VOTED]: (payload: PollVotedPayload) => void;
   readonly [EVENTS.SERVER.POLL_CLOSED]: (payload: PollClosedPayload) => void;
   readonly [EVENTS.SERVER.PROFILE_UPDATED]: (payload: ProfileUpdatedPayload) => void;
+  readonly [EVENTS.SERVER.MESSAGE_PINNED]: (payload: MessagePinnedPayload) => void;
+  readonly [EVENTS.SERVER.DISAPPEARING_CHANGED]: (payload: DisappearingChangedPayload) => void;
 };
 
 export type ClientToServerEvents = {
@@ -480,7 +541,9 @@ export type ClientToServerEvents = {
   readonly [EVENTS.CLIENT.GROUP_CREATE]: (payload: {
     readonly name: string;
     readonly members: readonly string[];
+    readonly description?: string;
   }) => void;
+  readonly [EVENTS.CLIENT.GROUP_UPDATE]: (payload: GroupUpdatePayload) => void;
   readonly [EVENTS.CLIENT.GROUP_MESSAGE_SEND]: (payload: GroupEncryptedPayload) => void;
   readonly [EVENTS.CLIENT.GROUP_MEMBER_ADD]: (payload: GroupTargetPayload) => void;
   readonly [EVENTS.CLIENT.GROUP_MEMBER_REMOVE]: (payload: GroupTargetPayload) => void;
@@ -493,6 +556,8 @@ export type ClientToServerEvents = {
   readonly [EVENTS.CLIENT.POLL_VOTE]: (payload: PollVotePayload) => void;
   readonly [EVENTS.CLIENT.POLL_CLOSE]: (payload: PollClosePayload) => void;
   readonly [EVENTS.CLIENT.PROFILE_UPDATE]: (payload: ProfileUpdatePayload) => void;
+  readonly [EVENTS.CLIENT.MESSAGE_PIN]: (payload: MessagePinPayload) => void;
+  readonly [EVENTS.CLIENT.DISAPPEARING_SET]: (payload: DisappearingSetPayload) => void;
 };
 
 // ── Utility ───────────────────────────────────────────────────────────

@@ -6,6 +6,7 @@ import { Server } from 'socket.io';
 import { io as Client } from 'socket.io-client';
 
 import { AccountStore } from './account-store';
+import { DmSettingsStore } from './dm-settings-store';
 import { E2eeSession } from './e2ee-session';
 import { GroupStore } from './group-store';
 import { KickVoteStore } from './kick-vote-store';
@@ -141,6 +142,7 @@ describe('Socket.io Server', () => {
   let kickVoteStore: KickVoteStore;
   let mediaAuth: MediaAuth;
   let profileStore: ProfileStore;
+  let dmSettingsStore: DmSettingsStore;
   let bunServer: ReturnType<typeof Bun.serve>;
   let port: number;
   const clients: TestClient[] = [];
@@ -158,6 +160,7 @@ describe('Socket.io Server', () => {
     kickVoteStore = new KickVoteStore();
     mediaAuth = new MediaAuth();
     profileStore = new ProfileStore();
+    dmSettingsStore = new DmSettingsStore();
     createServer(
       io,
       userRegistry,
@@ -168,6 +171,7 @@ describe('Socket.io Server', () => {
       kickVoteStore,
       mediaAuth,
       profileStore,
+      dmSettingsStore,
       pino({ level: 'silent' }),
     );
 
@@ -198,6 +202,7 @@ describe('Socket.io Server', () => {
     kickVoteStore.destroy();
     mediaAuth.destroy();
     profileStore.destroy();
+    dmSettingsStore.destroy();
     rateLimiters.destroy();
     accountStore.destroy();
     groupStore.destroy();

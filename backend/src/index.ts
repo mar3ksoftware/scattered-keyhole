@@ -3,6 +3,7 @@ import { Server as Engine } from '@socket.io/bun-engine';
 import { Server } from 'socket.io';
 import { AccountStore } from './account-store';
 import { config } from './config';
+import { DmSettingsStore } from './dm-settings-store';
 import { GroupStore } from './group-store';
 import { KickVoteStore } from './kick-vote-store';
 import { logger } from './logger';
@@ -40,6 +41,7 @@ const kickVoteStore = new KickVoteStore();
 const mediaStore = new MediaStore();
 const mediaAuth = new MediaAuth();
 const profileStore = new ProfileStore();
+const dmSettingsStore = new DmSettingsStore();
 const mediaRateLimiters = new RateLimiterRegistry();
 const mediaHttp = createMediaHttpHandler(
   mediaStore,
@@ -59,6 +61,7 @@ createServer(
   kickVoteStore,
   mediaAuth,
   profileStore,
+  dmSettingsStore,
   logger,
 );
 
@@ -100,6 +103,7 @@ function shutdown(): void {
   mediaStore.destroy();
   mediaAuth.destroy();
   profileStore.destroy();
+  dmSettingsStore.destroy();
   mediaRateLimiters.destroy();
   server.stop(true);
   process.exit(0);

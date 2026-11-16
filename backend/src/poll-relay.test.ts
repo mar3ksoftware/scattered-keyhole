@@ -6,6 +6,7 @@ import { Server } from 'socket.io';
 import { io as Client } from 'socket.io-client';
 
 import { AccountStore } from './account-store';
+import { DmSettingsStore } from './dm-settings-store';
 import { GroupStore } from './group-store';
 import { KickVoteStore } from './kick-vote-store';
 import { MediaAuth } from './media-auth';
@@ -108,6 +109,7 @@ describe('Poll relays', () => {
   let kickVoteStore: KickVoteStore;
   let mediaAuth: MediaAuth;
   let profileStore: ProfileStore;
+  let dmSettingsStore: DmSettingsStore;
   let bunServer: ReturnType<typeof Bun.serve>;
   let port: number;
   const clients: TestClient[] = [];
@@ -141,6 +143,7 @@ describe('Poll relays', () => {
     kickVoteStore = new KickVoteStore();
     mediaAuth = new MediaAuth();
     profileStore = new ProfileStore();
+    dmSettingsStore = new DmSettingsStore();
     createServer(
       io,
       userRegistry,
@@ -151,6 +154,7 @@ describe('Poll relays', () => {
       kickVoteStore,
       mediaAuth,
       profileStore,
+      dmSettingsStore,
       pino({ level: 'silent' }),
     );
 
@@ -181,6 +185,7 @@ describe('Poll relays', () => {
     kickVoteStore.destroy();
     mediaAuth.destroy();
     profileStore.destroy();
+    dmSettingsStore.destroy();
     rateLimiters.destroy();
     accountStore.destroy();
     groupStore.destroy();
