@@ -1,6 +1,8 @@
 import 'dart:convert';
 
+import '../models/json_utils.dart';
 import '../models/media.dart';
+import '../models/poll.dart';
 
 /// Maximum length of a reply excerpt shown on a bubble.
 const int kReplyExcerptMax = 140;
@@ -9,13 +11,15 @@ const int kReplyExcerptMax = 140;
 class ParsedEnvelope {
   final String? text;
   final MediaDescriptor? media;
+  final PollDefinition? poll;
   final String? raw;
   final Map<String, dynamic>? reply;
 
-  const ParsedEnvelope({this.text, this.media, this.raw, this.reply});
+  const ParsedEnvelope({this.text, this.media, this.poll, this.raw, this.reply});
 
   bool get isText => text != null;
   bool get isMedia => media != null;
+  bool get isPoll => poll != null;
   bool get isRaw => raw != null;
 }
 
@@ -33,6 +37,7 @@ Map<String, dynamic>? _parseReplyRef(dynamic value) {
 /// Parses a decrypted payload exactly like the frontend's `parseEnvelope`:
 /// JSON parse failure → raw; `t === 'media'` → descriptor (malformed → raw);
 /// `t === 'text'` → text plus optional reply (`b` must be a string, else raw);
+/// `t === 'poll'` → definition appended after text (malformed → raw);
 /// any other `t` → raw.
 ParsedEnvelope parseEnvelope(String decrypted) {
   Object? parsed;
@@ -59,6 +64,12 @@ ParsedEnvelope parseEnvelope(String decrypted) {
     return ParsedEnvelope(text: b, reply: _parseReplyRef(envelope['r']));
   }
 
+  if (t == 'poll') {
+    final poll = PollDefinition.fromEnvelope(asJsonMap(envelope));
+    if (poll == null) return ParsedEnvelope(raw: decrypted);
+    return ParsedEnvelope(poll: poll, reply: _parseReplyRef(envelope['r']));
+  }
+
   return ParsedEnvelope(raw: decrypted);
 }
 
@@ -67,6 +78,14 @@ String wrapTextEnvelope(String body, [Map<String, dynamic>? reply]) {
   final envelope = <String, dynamic>{'t': 'text', 'b': body};
   if (reply != null) envelope['r'] = reply;
   return jsonEncode(envelope);
+}
+
+/// Wraps a poll send in the canonical envelope `{t:'poll', q, o}` (spec B1).
+/// Returns null when the definition fails validation (same rules as receive).
+String? wrapPollEnvelope(String question, List<String> options) {
+  final poll = PollDefinition.fromEnvelope({'q': question, 'o': options});
+  if (poll == null) return null;
+  return jsonEncode({'t': 'poll', ...poll.toJson()});
 }
 
 /// Builds the wire reply ref `{id, u, e}` (spec C4).
@@ -85,10 +104,12 @@ String excerptOf(String text) {
 }
 
 /// Reply excerpt for a message body: media targets use the file name or
-/// `"Attachment"`, text targets use the body (≤140 chars).
-String replyExcerptFor(String body, {String? mediaName}) {
+/// `"Attachment"`, poll targets use the question, text targets use the body
+/// (≤140 chars).
+String replyExcerptFor(String body, {String? mediaName, PollDefinition? poll}) {
   if (mediaName != null) {
     return excerptOf(mediaName.isEmpty ? 'Attachment' : mediaName);
   }
+  if (poll != null) return excerptOf(poll.question);
   return excerptOf(body);
 }

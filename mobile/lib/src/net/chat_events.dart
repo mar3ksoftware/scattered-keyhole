@@ -20,6 +20,8 @@ abstract final class ChatEvents {
   static const messageEdit = 'message:edit';
   static const messageDelete = 'message:delete';
   static const profileUpdate = 'profile:update';
+  static const pollVote = 'poll:vote';
+  static const pollClose = 'poll:close';
 
   // Server -> client.
   static const mediaToken = 'media:token';
@@ -48,6 +50,8 @@ abstract final class ChatEvents {
   static const profileUpdated = 'profile:updated';
   static const groupMemberRemoved = 'group:member:removed';
   static const groupKickTally = 'group:kick:tally';
+  static const pollVoted = 'poll:voted';
+  static const pollClosed = 'poll:closed';
 
   // Socket.io lifecycle.
   static const connect = 'connect';

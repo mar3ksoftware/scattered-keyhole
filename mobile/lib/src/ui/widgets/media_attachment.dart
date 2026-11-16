@@ -7,6 +7,7 @@ import '../../net/media_client.dart';
 import '../../net/media_opener.dart';
 import '../../state/chat_controller.dart';
 import '../theme/app_theme.dart';
+import 'audio_attachment.dart';
 
 /// Lazy attachment renderer inside a chat bubble: fetches and decrypts the
 /// descriptor's file through the controller cache, then shows an inline
@@ -73,6 +74,10 @@ class _MediaAttachmentState extends State<MediaAttachment> {
     }
 
     final bytes = result.bytes!;
+    // Voice notes dispatch before images/video (spec H allowlist order).
+    if (widget.descriptor.mime.startsWith('audio/')) {
+      return AudioAttachment(descriptor: widget.descriptor, bytes: bytes);
+    }
     if (widget.descriptor.mime.startsWith('image/')) {
       return ConstrainedBox(
         constraints: const BoxConstraints(maxHeight: 260),

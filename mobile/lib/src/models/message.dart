@@ -1,5 +1,6 @@
 import 'json_utils.dart';
 import 'media.dart';
+import 'poll.dart';
 
 /// Outbound `message:send` payload.
 class EncryptedMessagePayload {
@@ -133,6 +134,7 @@ class DecryptedMessage {
     required this.isOwn,
     required this.decryptionFailed,
     this.media,
+    this.poll,
   });
 
   factory DecryptedMessage.fromJson(Map<String, dynamic> json) {
@@ -151,6 +153,7 @@ class DecryptedMessage {
       isOwn: readBool(json['isOwn']),
       decryptionFailed: readBool(json['decryptionFailed']),
       media: MediaDescriptor.tryFromJson(json['media']),
+      poll: PollDefinition.tryFromJson(json['poll']),
     );
   }
 
@@ -179,6 +182,11 @@ class DecryptedMessage {
   /// Attachment descriptor parsed from the plaintext, or null for text.
   final MediaDescriptor? media;
 
+  /// Poll definition parsed from the plaintext, or null for anything else.
+  /// Poll questions stay out of [body] so unread/mention parsing never
+  /// sees them (C5).
+  final PollDefinition? poll;
+
   /// The other participant in this conversation, regardless of direction.
   String get peerUsername => isOwn ? toUsername : fromUsername;
 
@@ -197,6 +205,7 @@ class DecryptedMessage {
     'isOwn': isOwn,
     'decryptionFailed': decryptionFailed,
     if (media != null) 'media': media!.toJson(),
+    if (poll != null) 'poll': poll!.toJson(),
   };
 
   DecryptedMessage copyWith({
@@ -208,6 +217,7 @@ class DecryptedMessage {
     bool? deleted,
     bool? decryptionFailed,
     MediaDescriptor? media,
+    PollDefinition? poll,
   }) {
     return DecryptedMessage(
       id: id ?? this.id,
@@ -224,6 +234,7 @@ class DecryptedMessage {
       isOwn: isOwn,
       decryptionFailed: decryptionFailed ?? this.decryptionFailed,
       media: media ?? this.media,
+      poll: poll ?? this.poll,
     );
   }
 }
@@ -320,6 +331,7 @@ class DecryptedGroupMessage {
     required this.isOwn,
     required this.decryptionFailed,
     this.media,
+    this.poll,
   });
 
   factory DecryptedGroupMessage.fromJson(Map<String, dynamic> json) {
@@ -337,6 +349,7 @@ class DecryptedGroupMessage {
       isOwn: readBool(json['isOwn']),
       decryptionFailed: readBool(json['decryptionFailed']),
       media: MediaDescriptor.tryFromJson(json['media']),
+      poll: PollDefinition.tryFromJson(json['poll']),
     );
   }
 
@@ -364,6 +377,11 @@ class DecryptedGroupMessage {
   /// Attachment descriptor parsed from the plaintext, or null for text.
   final MediaDescriptor? media;
 
+  /// Poll definition parsed from the plaintext, or null for anything else.
+  /// Poll questions stay out of [body] so unread/mention parsing never
+  /// sees them (C5).
+  final PollDefinition? poll;
+
   Map<String, dynamic> toJson() => <String, dynamic>{
     if (id.isNotEmpty) 'id': id,
     'groupId': groupId,
@@ -378,6 +396,7 @@ class DecryptedGroupMessage {
     'isOwn': isOwn,
     'decryptionFailed': decryptionFailed,
     if (media != null) 'media': media!.toJson(),
+    if (poll != null) 'poll': poll!.toJson(),
   };
 
   DecryptedGroupMessage copyWith({
@@ -389,6 +408,7 @@ class DecryptedGroupMessage {
     bool? deleted,
     bool? decryptionFailed,
     MediaDescriptor? media,
+    PollDefinition? poll,
   }) {
     return DecryptedGroupMessage(
       id: id ?? this.id,
@@ -404,6 +424,7 @@ class DecryptedGroupMessage {
       isOwn: isOwn,
       decryptionFailed: decryptionFailed ?? this.decryptionFailed,
       media: media ?? this.media,
+      poll: poll ?? this.poll,
     );
   }
 }

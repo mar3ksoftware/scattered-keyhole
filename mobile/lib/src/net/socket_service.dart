@@ -91,6 +91,12 @@ abstract interface class SocketService {
   /// `profile:update` — publish our display name and status.
   void sendProfileUpdate(ProfileUpdatePayload payload);
 
+  /// `poll:vote` — cast (or change) our vote on a poll.
+  void sendPollVote(PollVotePayload payload);
+
+  /// `poll:close` — close a poll we authored.
+  void sendPollClose(PollClosePayload payload);
+
   // ── Inbound: server -> client ──────────────────────────────────────────
 
   /// `user:joined` — a user (possibly us) joined; broadcast to everyone.
@@ -173,6 +179,12 @@ abstract interface class SocketService {
 
   /// `profile:updated` — a user changed their display name/status.
   Unsubscribe onProfileUpdated(void Function(ProfileUpdatedPayload payload) handler);
+
+  /// `poll:voted` — someone's vote on a poll was relayed (incl. our echo).
+  Unsubscribe onPollVoted(void Function(PollVotedPayload payload) handler);
+
+  /// `poll:closed` — a poll was closed by its author.
+  Unsubscribe onPollClosed(void Function(PollClosedPayload payload) handler);
 
   // ── Connection lifecycle listeners ─────────────────────────────────────
 
@@ -302,6 +314,16 @@ class IoSocketService implements SocketService {
   @override
   void sendProfileUpdate(ProfileUpdatePayload payload) {
     _socket.emit(ChatEvents.profileUpdate, payload.toJson());
+  }
+
+  @override
+  void sendPollVote(PollVotePayload payload) {
+    _socket.emit(ChatEvents.pollVote, payload.toJson());
+  }
+
+  @override
+  void sendPollClose(PollClosePayload payload) {
+    _socket.emit(ChatEvents.pollClose, payload.toJson());
   }
 
   // ── Inbound ────────────────────────────────────────────────────────────
@@ -494,6 +516,20 @@ class IoSocketService implements SocketService {
   Unsubscribe onProfileUpdated(void Function(ProfileUpdatedPayload payload) handler) {
     return _on(ChatEvents.profileUpdated, (data) {
       handler(ProfileUpdatedPayload.fromJson(asJsonMap(data)));
+    });
+  }
+
+  @override
+  Unsubscribe onPollVoted(void Function(PollVotedPayload payload) handler) {
+    return _on(ChatEvents.pollVoted, (data) {
+      handler(PollVotedPayload.fromJson(asJsonMap(data)));
+    });
+  }
+
+  @override
+  Unsubscribe onPollClosed(void Function(PollClosedPayload payload) handler) {
+    return _on(ChatEvents.pollClosed, (data) {
+      handler(PollClosedPayload.fromJson(asJsonMap(data)));
     });
   }
 

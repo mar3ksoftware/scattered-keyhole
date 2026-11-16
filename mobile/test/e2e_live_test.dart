@@ -388,6 +388,114 @@ void main() {
     timeout: const Timeout(Duration(seconds: 60)),
     skip: !live,
   );
+
+  test(
+    'polls and voice media through live backend',
+    () async {
+      final suffix = DateTime.now().millisecondsSinceEpoch % 100000;
+      final aName = 'alice_$suffix';
+      final bName = 'bob_$suffix';
+      final alice = ChatController.forServer(serverUrl: url);
+      final bob = ChatController.forServer(serverUrl: url);
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+
+      alice.joinAsGuest(aName);
+      bob.joinAsGuest(bName);
+
+      await _waitFor(() => alice.me != null && bob.me != null, 'both joined');
+      await _waitFor(
+        () =>
+            alice.e2ee.hasSharedKey(bName) && bob.e2ee.hasSharedKey(aName),
+        'shared keys derived on both sides',
+      );
+      await _waitFor(() => alice.mediaToken != null, 'alice media token');
+      await _waitFor(() => bob.mediaToken != null, 'bob media token');
+
+      // Alice creates a poll; bob decrypts the {t:'poll'} envelope.
+      expect(
+        await alice.sendPoll(bName, 'Coffee or tea?', <String>[
+          'Coffee',
+          'Tea',
+        ]),
+        isTrue,
+        reason: 'alice poll send failed: ${alice.error}',
+      );
+      await _waitFor(
+        () => bob
+            .messagesForPeer(aName)
+            .any((m) => m.poll?.question == 'Coffee or tea?'),
+        'bob decrypted the poll',
+      );
+      final pollMessage = bob
+          .messagesForPeer(aName)
+          .firstWhere((m) => m.poll != null);
+      final pollId = pollMessage.id;
+      expect(pollMessage.poll!.options, <String>['Coffee', 'Tea']);
+
+      // Bob votes Tea; alice's tally reflects it.
+      bob.votePoll(ConversationTarget.dm(aName), pollId, 1);
+      await _waitFor(
+        () => alice.pollTalliesFor(pollId)[bName] == 1,
+        'alice sees bob\'s first vote',
+      );
+
+      // Last-write-wins: bob switches to Coffee and the tally follows.
+      bob.votePoll(ConversationTarget.dm(aName), pollId, 0);
+      await _waitFor(
+        () => alice.pollTalliesFor(pollId)[bName] == 0,
+        'alice sees bob\'s revote',
+      );
+      expect(alice.pollTalliesFor(pollId), <String, int>{bName: 0});
+
+      // The author closes the poll; bob observes the closed flag.
+      alice.closePoll(ConversationTarget.dm(bName), pollId);
+      await _waitFor(
+        () => bob.isPollClosed(pollId),
+        'bob sees the closed poll',
+      );
+      expect(alice.isPollClosed(pollId), isTrue);
+
+      // A late vote after close is refused client-side (tally unchanged).
+      bob.votePoll(ConversationTarget.dm(aName), pollId, 1);
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect(alice.pollTalliesFor(pollId), <String, int>{bName: 0});
+
+      // Synthetic voice note: audio descriptor with duration, bytes intact.
+      final audio = Uint8List.fromList(
+        List<int>.generate(2048, (index) => (index * 7) % 251),
+      );
+      expect(
+        await alice.sendMediaMessage(
+          bName,
+          audio,
+          mime: 'audio/mp4',
+          name: 'note.m4a',
+          duration: 7,
+        ),
+        isTrue,
+        reason: 'alice voice send failed: ${alice.error}',
+      );
+      await _waitFor(
+        () => bob
+            .messagesForPeer(aName)
+            .any((m) => m.media?.mime == 'audio/mp4'),
+        'bob received the voice message',
+      );
+      final voice = bob
+          .messagesForPeer(aName)
+          .lastWhere((m) => m.media?.mime == 'audio/mp4');
+      expect(voice.media!.name, 'note.m4a');
+      expect(voice.media!.size, audio.length);
+      expect(voice.media!.d, 7.0);
+
+      final fetched = await bob.loadMedia(voice.media!);
+      expect(fetched.status, 'ready', reason: 'voice fetch did not succeed');
+      expect(fetched.bytes, orderedEquals(audio));
+    },
+    timeout: const Timeout(Duration(seconds: 60)),
+    skip: !live,
+  );
 }
 
 Future<void> _waitFor(bool Function() cond, String what) async {
