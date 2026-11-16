@@ -29,10 +29,12 @@ Projekt sklada sie z trzech czesci: backendu na Bun (port 3000), aplikacji webow
 - **Odpowiedzi i edycja.** Cytowanie wiadomosci oraz edycja wlasnego tekstu ze znacznikiem `(edited)`.
 - **Usuniecie dla wszystkich.** Tombstone dowolnej wyslanej wiadomosci.
 - **Liczniki nieprzeczytanych i wzmianki.** Liczniki nieprzeczytanych per rozmowa z podswietleniami `@username`.
+- **Ankiety.** Pytanie z 2-10 opcjami; czlonkowie glosuja i widza na zywo procenty, a autor moze zamknac ankiete.
+- **Wiadomosci glosowe.** Nagrywanie do 5 minut audio w polu wprowadzania; szyfrowane jak kazdy zalacznik i odtwarzane w miejscu.
 - **Administracja grupami.** Admini dodaja i usuwaja czlonkow; tworca grupy nie moze zostac usuniety ani wyrzucony.
 - **Glosowanie o wyrzucenie.** Czlonkowie glosuja nad wyrzuceniem kogos; do przyjecia wystarcza zwykla wiekszosc (`floor(members / 2) + 1`) w 60 sekund.
 - **Gosc i konta.** Mozna dolaczyc jako gosc albo zarejestrowac sie i zalogowac haslem oraz opcjonalnym PIN-em (4-6 cyfr).
-- **Szyfrowane udostepnianie mediow.** Zdjecia i filmy sa szyfrowane na urzadzeniu; serwer trzyma nieczytelne bloby w pamieci z TTL 24 h.
+- **Szyfrowane udostepnianie mediow.** Zdjecia, filmy i wiadomosci glosowe sa szyfrowane na urzadzeniu; serwer trzyma nieczytelne bloby w pamieci z TTL 24 h.
 - **Opcjonalny TLS/HTTPS.** Backend moze sam terminowac TLS albo pracowac na czystym `http` za reverse proxy.
 - **Konfigurowalny adres serwera.** Z ekranu logowania wskazujesz dowolny host w sieci LAN lub domene.
 - **Zero trwalosci czatu.** Ani localStorage, ani cookies, ani serwerowej pamieci wiadomosci.
@@ -279,7 +281,7 @@ Scattered Keyhole/
 | Modul | Opis |
 |---|---|
 | `src/index.ts` | Punkt wejscia Bun.serve, health check, graceful shutdown |
-| `src/server.ts` | Obsluga zdarzen Socket.io (join, register, login, message, e2ee relay, grupy, czlonkostwo, vote-kick, typing, potwierdzenia, reakcje, edycja/usuwanie, profile, disconnect) |
+| `src/server.ts` | Obsluga zdarzen Socket.io (join, register, login, message, e2ee relay, grupy, czlonkostwo, vote-kick, typing, potwierdzenia, reakcje, edycja/usuwanie, profile, przekazywanie ankiet, disconnect) |
 | `src/profile-store.ts` | Magazyn nazw wyswietlanych i statusow w pamieci, dokladany do zrzutow obecnosci i grup |
 | `src/types.ts` | Typy brandowane, mapy zdarzen, typy payloadow |
 | `src/config.ts` | Konfiguracja ze zmiennych srodowiskowych (port, CORS, logi, ping, TLS, sciezka DB) |
@@ -319,6 +321,7 @@ Scattered Keyhole/
 |---|---|
 | `lib/main.dart` | Punkt wejscia aplikacji |
 | `lib/src/state/chat_controller.dart` | Stan aplikacji (ChangeNotifier), odpowiednik webowego `ChatContext` |
+| `lib/src/state/voice_recorder.dart` | Maszyna stanow nagrywania glosu (uprawnienia, licznik czasu, auto-stop po 300 s) |
 | `lib/src/net/socket_service.dart` | Polaczenie Socket.io (domyslnie `http://localhost:3000`) |
 | `lib/src/net/server_config.dart` | Walidowany i zapisywany adres serwera z ekranu logowania |
 | `lib/src/net/chat_events.dart` | Stale nazw zdarzen Socket.io (identyczne jak w backendzie) |
@@ -327,7 +330,7 @@ Scattered Keyhole/
 | `lib/src/crypto/e2ee.dart` | Prymitywy ECDH P-256 + HKDF-SHA256 + AES-GCM-256 |
 | `lib/src/crypto/e2ee_session.dart` | Zarzadzanie kluczami wspoldzielonymi dla kazdego peera |
 | `lib/src/crypto/media_crypto.dart` | Szyfrowanie pojedynczego pliku (klucz pliku + IV, SHA-256) |
-| `lib/src/models/` | Modele protokolu: user, group, message, media, auth, errors |
+| `lib/src/models/` | Modele protokolu: user, group, message, media, poll, auth, errors |
 | `lib/src/ui/` | Ekrany (logowanie, powloka czatu, lista rozmow) i widgety |
 
 ### Kontrakt zdarzen Socket.io
@@ -351,6 +354,8 @@ Pelne typy leza w `backend/src/types.ts`; klient Flutter powtarza nazwy w `lib/s
 | `message:react` | Dodanie lub usuniecie reakcji emoji na wiadomosci |
 | `message:edit` | Podmiana szyfru wiadomosci wyslanej przez nadawce |
 | `message:delete` | Tombstone wiadomosci wyslanej przez nadawce dla wszystkich |
+| `poll:vote` | Glos na ankiecie w rozmowie prywatnej lub grupowej (`pollId`, `option`) |
+| `poll:close` | Zamkniecie wlasnej ankiety w rozmowie prywatnej lub grupowej (`pollId`) |
 | `profile:update` | Ustawienie wlasnej nazwy wyswietlanej (max 32) i statusu (max 80) |
 
 **Serwer -> klient:**
@@ -369,6 +374,8 @@ Pelne typy leza w `backend/src/types.ts`; klient Flutter powtarza nazwy w `lib/s
 | `message:reacted` | Reakcja dodana lub usunieta (emoji i nazwy uzytkownikow, do wszystkich oprocz autora) |
 | `message:edited` | Tresc wiadomosci podmieniona (nowy szyfr + flaga `edited`) |
 | `message:deleted` | Wiadomosc tombstonowana dla wszystkich |
+| `poll:voted` | Glos przekazany rozmowie (`pollId`, `option`, nazwa dzialajacego `u`) |
+| `poll:closed` | Ankieta zamknieta (`pollId`, nazwa `u`); klienci stosuja tylko gdy `u` jest autorem ankiety |
 | `profile:updated` | Zmieniona nazwa wyswietlana lub status (rozglaszane do wszystkich aktywnych uzytkownikow) |
 | `delivery_failed`, `message_rejected`, `error` | Bledy - nie ma kolejki offline, wiadomosc do uzytkownika offline od razu konczy sie niepowodzeniem |
 | `register_success` / `register_error`, `login_success` / `login_error` | Wyniki logowania |
@@ -401,7 +408,7 @@ Klient A                      Serwer                      Klient B
 
 ## Udostepnianie mediow
 
-Zdjecia i filmy ida jako **zaszyfrowane po stronie klienta zalaczniki**. Nadawca generuje losowy 32-bajtowy klucz pliku i 12-bajtowy IV na plik, usuwa metadane EXIF z obrazow, szyfruje plik AES-256-GCM i wysyla szyfrogram przez `PUT /media/:id`. Wiadomosc czatu wskazujaca plik to zwykla wiadomosc E2EE, ktorej odszyfrowany tresc niesie deskryptor (`fileId`, klucz, IV, SHA-256 szyfrogramu, mime, rozmiar, wymiary, oryginalna nazwa). Klucz pliku nigdy nie opuszcza tresci wiadomosci E2EE - serwer przechowuje same nieczytelne bajty. Odbiorca przed odszyfrowaniem porownuje SHA-256 z deskryptorem, wiec podmieniony plik zostaje odrzucony.
+Zdjecia, filmy i wiadomosci glosowe ida jako **zaszyfrowane po stronie klienta zalaczniki**. Nadawca generuje losowy 32-bajtowy klucz pliku i 12-bajtowy IV na plik, usuwa metadane EXIF z obrazow, szyfruje plik AES-256-GCM i wysyla szyfrogram przez `PUT /media/:id`. Wiadomosc czatu wskazujaca plik to zwykla wiadomosc E2EE, ktorej odszyfrowany tresc niesie deskryptor (`fileId`, klucz, IV, SHA-256 szyfrogramu, mime, rozmiar, wymiary, oryginalna nazwa i opcjonalny czas trwania glosu). Klucz pliku nigdy nie opuszcza tresci wiadomosci E2EE - serwer przechowuje same nieczytelne bajty. Odbiorca przed odszyfrowaniem porownuje SHA-256 z deskryptorem, wiec podmieniony plik zostaje odrzucony.
 
 ### Wydawanie tokenow
 
@@ -491,7 +498,7 @@ cd mobile
 RUN_LIVE_E2E=1 flutter test test/e2e_live_test.dart
 ```
 
-Testy steruja prawdziwymi klientami `ChatController` podlaczonymi do dzialajacego backendu i sprawdzaja dwukierunkowe wiadomosci E2EE miedzy dwoch klientami, czlonkostwo w grupie (zaproszenie osoby offline, usuniecie przez admina, przeglosowane wyrzucenie, katalog uzytkownikow) oraz pelny obieg zalacznika (wysylka -> deskryptor przez E2EE -> pobranie -> porownanie bajt po bajcie). Zmienna `SERVER_URL` zmienia adres serwera (domyslnie `http://localhost:3000`).
+Testy steruja prawdziwymi klientami `ChatController` podlaczonymi do dzialajacego backendu i sprawdzaja dwukierunkowe wiadomosci E2EE miedzy dwoch klientami, czlonkostwo w grupie (zaproszenie osoby offline, usuniecie przez admina, przeglosowane wyrzucenie, katalog uzytkownikow) pelny obieg zalacznika (wysylka -> deskryptor przez E2EE -> pobranie -> porownanie bajt po bajcie), cykl zycia ankiety (utworzenie, glos, zmiana glosu, zamkniecie) oraz obieg wiadomosci glosowej z deskryptorem czasu trwania. Zmienna `SERVER_URL` zmienia adres serwera (domyslnie `http://localhost:3000`).
 
 ## Stack technologiczny
 
@@ -499,7 +506,7 @@ Testy steruja prawdziwymi klientami `ChatController` podlaczonymi do dzialajaceg
 
 **Web:** React 19, Vite, TypeScript 6, Tailwind CSS v4, Socket.io-client v4, Biome
 
-**Mobile:** Flutter/Dart, socket_io_client, cryptography, pointycastle, shared_preferences, file_picker
+**Mobile:** Flutter/Dart, socket_io_client, cryptography, pointycastle, shared_preferences, file_picker, record, media_kit
 
 ## Ograniczenia projektu
 

@@ -29,10 +29,12 @@ The repository ships three components: a Bun backend on port 3000, a React web a
 - **Replies and edits** — quote a message, or edit your own text with an `(edited)` marker
 - **Delete for everyone** — tombstone any message you sent
 - **Unread badges and mentions** — per-conversation unread counts with `@username` highlights
+- **Polls** — ask a question with 2–10 options; members vote and watch live tallies with percentages, and the author can close the poll
+- **Voice messages** — record up to 5 minutes of audio in the composer; encrypted like any attachment and played back inline
 - **Group administration** — admins add and remove members; the group creator cannot be removed or kicked
 - **Vote-to-kick** — members vote to remove someone; a simple majority (`floor(members / 2) + 1`) within 60 s passes the vote
 - **Guest and account auth** — join as a guest, or register and log in with a password plus an optional 4–6 digit PIN
-- **Encrypted media sharing** — photos and videos are encrypted on the device; the server holds opaque blobs in memory with a 24 h TTL
+- **Encrypted media sharing** — photos, videos, and voice notes are encrypted on the device; the server holds opaque blobs in memory with a 24 h TTL
 - **Optional TLS/HTTPS** — the backend can terminate TLS itself, or run plain behind a reverse proxy
 - **Configurable server address** — point the Flutter app at any LAN host or domain from the auth screen
 - **Zero chat persistence** — no localStorage, no cookies, no server-side message storage
@@ -279,7 +281,7 @@ Scattered Keyhole/
 | Module | Purpose |
 |---|---|
 | `src/index.ts` | Bun.serve entry point, health check, graceful shutdown |
-| `src/server.ts` | Socket.io event handlers (join, register, login, message, e2ee relay, groups, membership, vote-kick, typing, receipts, reactions, edit/delete, profiles, disconnect) |
+| `src/server.ts` | Socket.io event handlers (join, register, login, message, e2ee relay, groups, membership, vote-kick, typing, receipts, reactions, edit/delete, profiles, poll relay, disconnect) |
 | `src/profile-store.ts` | In-memory display name and status store, stamped onto presence and group snapshots |
 | `src/types.ts` | Branded types, event maps, payload types |
 | `src/config.ts` | Environment-driven configuration (port, CORS, log level, ping, TLS, DB path) |
@@ -319,6 +321,7 @@ Scattered Keyhole/
 |---|---|
 | `lib/main.dart` | App entry point |
 | `lib/src/state/chat_controller.dart` | Application state (ChangeNotifier), mirrors the web `ChatContext` |
+| `lib/src/state/voice_recorder.dart` | Voice recording state machine (permission, elapsed time, 300 s auto-stop) |
 | `lib/src/net/socket_service.dart` | Socket.io connection (default `http://localhost:3000`) |
 | `lib/src/net/server_config.dart` | Validated, persisted server address from the auth screen |
 | `lib/src/net/chat_events.dart` | Socket.io event name constants (same names as the backend) |
@@ -327,7 +330,7 @@ Scattered Keyhole/
 | `lib/src/crypto/e2ee.dart` | ECDH P-256 + HKDF-SHA256 + AES-GCM-256 primitives |
 | `lib/src/crypto/e2ee_session.dart` | Per-peer shared key management |
 | `lib/src/crypto/media_crypto.dart` | Per-file encryption (file key + IV, SHA-256) |
-| `lib/src/models/` | Wire models: user, group, message, media, auth, errors |
+| `lib/src/models/` | Wire models: user, group, message, media, poll, auth, errors |
 | `lib/src/ui/` | Screens (auth, chat shell, conversation list) and widgets |
 
 ### Socket.io event contract
@@ -351,6 +354,8 @@ Full types live in `backend/src/types.ts`; the Flutter client mirrors the names 
 | `message:react` | Add or remove an emoji reaction on a message |
 | `message:edit` | Replace the ciphertext of a message the sender authored |
 | `message:delete` | Tombstone a message the sender authored for everyone |
+| `poll:vote` | Vote on a poll in a DM or group (`pollId`, `option`) |
+| `poll:close` | Close your own poll in a DM or group (`pollId`) |
 | `profile:update` | Set own display name (max 32) and status (max 80) |
 
 **Server → client:**
@@ -369,6 +374,8 @@ Full types live in `backend/src/types.ts`; the Flutter client mirrors the names 
 | `message:reacted` | Reaction added or removed (emoji + usernames, sent to everyone but the actor) |
 | `message:edited` | Message body replaced (new ciphertext + `edited` flag) |
 | `message:deleted` | Message tombstoned for everyone |
+| `poll:voted` | Vote relayed to the conversation (`pollId`, `option`, acting username `u`) |
+| `poll:closed` | Poll closed (`pollId`, acting username `u`); clients apply it only when `u` is the poll author |
 | `profile:updated` | Display name or status changed (broadcast to all active users) |
 | `delivery_failed`, `message_rejected`, `error` | Failures — there is no offline queue, a message to an offline user fails immediately |
 | `register_success` / `register_error`, `login_success` / `login_error` | Auth results |
@@ -401,7 +408,7 @@ Client A                    Server                    Client B
 
 ## Media sharing
 
-Photos and videos travel as **client-side encrypted attachments**. The sender generates a random 32-byte file key and a 12-byte IV per file, strips EXIF metadata from images, encrypts the file with AES-256-GCM, and uploads the ciphertext with `PUT /media/:id`. The chat message that references the file is an ordinary E2EE message whose decrypted plaintext carries a descriptor (`fileId`, key, IV, SHA-256 of the ciphertext, mime, size, dimensions, original name). The file key never leaves the E2EE message body — the server stores opaque bytes it cannot read. The receiver verifies SHA-256 against the descriptor before decrypting, so a swapped blob is rejected.
+Photos, videos, and voice notes travel as **client-side encrypted attachments**. The sender generates a random 32-byte file key and a 12-byte IV per file, strips EXIF metadata from images, encrypts the file with AES-256-GCM, and uploads the ciphertext with `PUT /media/:id`. The chat message that references the file is an ordinary E2EE message whose decrypted plaintext carries a descriptor (`fileId`, key, IV, SHA-256 of the ciphertext, mime, size, dimensions, original name, and an optional voice duration). The file key never leaves the E2EE message body — the server stores opaque bytes it cannot read. The receiver verifies SHA-256 against the descriptor before decrypting, so a swapped blob is rejected.
 
 ### Token issuance
 
@@ -491,7 +498,7 @@ cd mobile
 RUN_LIVE_E2E=1 flutter test test/e2e_live_test.dart
 ```
 
-The suite drives real `ChatController` clients against the running backend and verifies bidirectional E2EE messages between two clients, group membership (an invitee added while offline, admin remove, a passed vote-kick, the user directory), and a media attachment round trip (upload → descriptor over E2EE → download → byte-for-byte check). `SERVER_URL` overrides the target (`http://localhost:3000` by default).
+The suite drives real `ChatController` clients against the running backend and verifies bidirectional E2EE messages between two clients, group membership (an invitee added while offline, admin remove, a passed vote-kick, the user directory), a media attachment round trip (upload → descriptor over E2EE → download → byte-for-byte check), a poll lifecycle (create, vote, revote, close), and a voice media round trip with its duration descriptor. `SERVER_URL` overrides the target (`http://localhost:3000` by default).
 
 ## Tech Stack
 
@@ -499,7 +506,7 @@ The suite drives real `ChatController` clients against the running backend and v
 
 **Web:** React 19, Vite, TypeScript 6, Tailwind CSS v4, Socket.io-client v4, Biome
 
-**Mobile:** Flutter/Dart, socket_io_client, cryptography, pointycastle, shared_preferences, file_picker
+**Mobile:** Flutter/Dart, socket_io_client, cryptography, pointycastle, shared_preferences, file_picker, record, media_kit
 
 ## Project Constraints
 
