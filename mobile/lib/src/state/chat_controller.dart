@@ -233,6 +233,13 @@ class ChatController extends ChangeNotifier {
   /// DM peer → highest `receipt:read` upTo received from them (C2).
   final Map<String, int> _readUpTo = <String, int>{};
 
+  /// Poll tallies per pollId → voter username → chosen option index;
+  /// a later vote from the same voter replaces the earlier one (spec B3).
+  final Map<String, Map<String, int>> _pollTallies = <String, Map<String, int>>{};
+
+  /// Poll ids that have been closed (by us optimistically or by a relay).
+  final Set<String> _pollsClosed = <String>{};
+
   /// Conversation typing keys → expiry of the last active flag (C1).
   final Map<String, int> _typing = <String, int>{};
 
@@ -383,6 +390,17 @@ class ChatController extends ChangeNotifier {
     return Map<String, Set<String>>.unmodifiable(agg);
   }
 
+  /// Poll tallies for [pollId]: voter username → option index (spec B3).
+  /// Empty when nobody has voted yet.
+  Map<String, int> pollTalliesFor(String pollId) {
+    final tallies = _pollTallies[pollId];
+    if (tallies == null) return const <String, int>{};
+    return Map<String, int>.unmodifiable(tallies);
+  }
+
+  /// Whether the poll with [pollId] has been closed (spec B3).
+  bool isPollClosed(String pollId) => _pollsClosed.contains(pollId);
+
   static String _unreadKey(ConversationTarget target) =>
       target.isGroup ? 'group:${target.groupId}' : 'dm:${target.username}';
 
@@ -456,6 +474,8 @@ class ChatController extends ChangeNotifier {
     _unreadCounted.clear();
     _reactions.clear();
     _readUpTo.clear();
+    _pollTallies.clear();
+    _pollsClosed.clear();
     _typing.clear();
     _profiles.clear();
     _lastSentReceipt.clear();
@@ -648,6 +668,9 @@ class ChatController extends ChangeNotifier {
     'video/mp4',
     'video/webm',
     'video/quicktime',
+    'audio/mp4',
+    'audio/webm',
+    'audio/mpeg',
   };
 
   void _handleMediaToken(MediaTokenPayload payload) {
@@ -663,11 +686,13 @@ class ChatController extends ChangeNotifier {
     Uint8List bytes, {
     required String mime,
     String? name,
+    num? duration,
   }) {
     return _sendMedia(
       bytes: bytes,
       mime: mime,
       name: name,
+      duration: duration,
       send: (envelope) => _sendEncrypted(toUsername, envelope),
     );
   }
@@ -679,11 +704,13 @@ class ChatController extends ChangeNotifier {
     Uint8List bytes, {
     required String mime,
     String? name,
+    num? duration,
   }) {
     return _sendMedia(
       bytes: bytes,
       mime: mime,
       name: name,
+      duration: duration,
       send: (envelope) => _sendGroupEncrypted(groupId, envelope),
     );
   }
@@ -693,6 +720,7 @@ class ChatController extends ChangeNotifier {
     required String mime,
     required String? name,
     required Future<bool> Function(String envelope) send,
+    num? duration,
   }) async {
     if (bytes.length > _maxMediaBytes) {
       _showError('File is too large (16 MB max).');
@@ -765,6 +793,10 @@ class ChatController extends ChangeNotifier {
     };
     if (width != null) envelopeParts['w'] = width;
     if (height != null) envelopeParts['h'] = height;
+    if (duration != null && duration > 0 && duration <= 300) {
+      // Voice notes carry their length in seconds (spec B2 `d`).
+      envelopeParts['d'] = duration.toDouble();
+    }
     if (normalizedName != null) envelopeParts['name'] = normalizedName;
     return send(jsonEncode(envelopeParts));
   }
@@ -858,6 +890,147 @@ class ChatController extends ChangeNotifier {
     const failure = MediaFetchResult.error();
     _mediaByFileId[fileId] = failure;
     return failure;
+  }
+
+  // ── Polls (spec B) ─────────────────────────────────────────────────────
+
+  /// Sends a poll in the canonical `{t:'poll', q, o}` envelope through the
+  /// normal `message:send` path; invalid definitions send nothing (B1).
+  Future<bool> sendPoll(
+    String toUsername,
+    String question,
+    List<String> options,
+  ) {
+    final envelope = wrapPollEnvelope(question, options);
+    if (envelope == null) return Future<bool>.value(false);
+    return _sendEncrypted(toUsername, envelope);
+  }
+
+  /// Group counterpart of [sendPoll].
+  Future<bool> sendGroupPoll(
+    String groupId,
+    String question,
+    List<String> options,
+  ) {
+    final envelope = wrapPollEnvelope(question, options);
+    if (envelope == null) return Future<bool>.value(false);
+    return _sendGroupEncrypted(groupId, envelope);
+  }
+
+  /// Optimistically records our vote on [pollId] and emits `poll:vote`
+  /// (B3); a `message_rejected` restores the previous choice. Unknown or
+  /// tombstoned polls, out-of-range options and closed polls are refused.
+  void votePoll(ConversationTarget target, String pollId, int option) {
+    final me = _me;
+    if (me == null) return;
+    final context = _pollContext(pollId);
+    final poll = context?.poll;
+    if (context == null || poll == null || context.deleted) return;
+    if (option < 0 || option >= poll.options.length) return;
+    if (_pollsClosed.contains(pollId)) return;
+
+    final previous = _pollTallies[pollId]?[me.username];
+    _enqueueOp(() => _setPollVote(pollId, me.username, previous));
+    _setPollVote(pollId, me.username, option);
+    _socket.sendPollVote(
+      PollVotePayload(
+        to: target.isDm ? target.username : null,
+        groupId: target.isGroup ? target.groupId : null,
+        pollId: pollId,
+        option: option,
+      ),
+    );
+  }
+
+  /// Optimistically closes our own poll and emits `poll:close` (B3);
+  /// a `message_rejected` reopens it locally. Closing is author-only on
+  /// the client — the server relays blindly.
+  void closePoll(ConversationTarget target, String pollId) {
+    final me = _me;
+    if (me == null) return;
+    final context = _pollContext(pollId);
+    if (context == null || context.poll == null || context.deleted) return;
+    if (!context.isOwn || context.fromUsername != me.username) return;
+    if (_pollsClosed.contains(pollId)) return;
+
+    _enqueueOp(() => _setPollClosed(pollId, false));
+    _setPollClosed(pollId, true);
+    _socket.sendPollClose(
+      PollClosePayload(
+        to: target.isDm ? target.username : null,
+        groupId: target.isGroup ? target.groupId : null,
+        pollId: pollId,
+      ),
+    );
+  }
+
+  /// The poll-bearing message with [pollId] across both stores, reduced to
+  /// the fields the vote/close guards need; null when unknown.
+  ({PollDefinition? poll, bool deleted, String fromUsername, bool isOwn})?
+  _pollContext(String pollId) {
+    final Object? message = _privateById(pollId) ?? _groupById(pollId);
+    return switch (message) {
+      DecryptedMessage(:final poll, :final deleted, :final fromUsername, :final isOwn) => (
+        poll: poll,
+        deleted: deleted,
+        fromUsername: fromUsername,
+        isOwn: isOwn,
+      ),
+      DecryptedGroupMessage(:final poll, :final deleted, :final fromUsername, :final isOwn) => (
+        poll: poll,
+        deleted: deleted,
+        fromUsername: fromUsername,
+        isOwn: isOwn,
+      ),
+      _ => null,
+    };
+  }
+
+  /// Applies one vote: a null option removes the voter's previous choice
+  /// (rollback), otherwise the last write wins (B3).
+  void _setPollVote(String pollId, String username, int? option) {
+    if (option == null) {
+      final tallies = _pollTallies[pollId];
+      if (tallies == null || tallies.remove(username) == null) return;
+      _notify();
+      return;
+    }
+    final tallies = _pollTallies.putIfAbsent(pollId, () => <String, int>{});
+    if (tallies[username] == option) return;
+    tallies[username] = option;
+    _notify();
+  }
+
+  /// Flips the closed flag; repeated states are no-ops (idempotent, B3).
+  void _setPollClosed(String pollId, bool closed) {
+    if (_pollsClosed.contains(pollId) == closed) return;
+    if (closed) {
+      _pollsClosed.add(pollId);
+    } else {
+      _pollsClosed.remove(pollId);
+    }
+    _notify();
+  }
+
+  /// `poll:voted` relay — every validity rule is re-checked locally because
+  /// the server relays blindly (B3).
+  void _handlePollVoted(PollVotedPayload payload) {
+    final context = _pollContext(payload.pollId);
+    final poll = context?.poll;
+    if (context == null || poll == null || context.deleted) return;
+    if (_pollsClosed.contains(payload.pollId)) return;
+    // Our own vote was applied optimistically before the relay excluded us.
+    if (payload.u == _me?.username) return;
+    if (payload.option < 0 || payload.option >= poll.options.length) return;
+    _setPollVote(payload.pollId, payload.u, payload.option);
+  }
+
+  /// `poll:closed` relay — only the poll author's close is applied (B3).
+  void _handlePollClosed(PollClosedPayload payload) {
+    final context = _pollContext(payload.pollId);
+    if (context == null || context.poll == null || context.deleted) return;
+    if (payload.u != context.fromUsername) return;
+    _setPollClosed(payload.pollId, true);
   }
 
   // ── Typing (C1) ────────────────────────────────────────────────────────
@@ -1165,6 +1338,7 @@ class ChatController extends ChangeNotifier {
       if (original == null ||
           !original.isOwn ||
           original.media != null ||
+          original.poll != null ||
           original.deleted) {
         return false;
       }
@@ -1176,6 +1350,7 @@ class ChatController extends ChangeNotifier {
       if (original == null ||
           !original.isOwn ||
           original.media != null ||
+          original.poll != null ||
           original.deleted) {
         return false;
       }
@@ -1308,10 +1483,16 @@ class ChatController extends ChangeNotifier {
         ? _groupById(payload.targetId)
         : _privateById(payload.targetId);
     final isOwnText = switch (original) {
-      DecryptedMessage(:final fromUsername, :final media, :final deleted) =>
-        fromUsername == payload.fromUsername && media == null && !deleted,
-      DecryptedGroupMessage(:final fromUsername, :final media, :final deleted) =>
-        fromUsername == payload.fromUsername && media == null && !deleted,
+      DecryptedMessage(:final fromUsername, :final media, :final poll, :final deleted) =>
+        fromUsername == payload.fromUsername &&
+            media == null &&
+            poll == null &&
+            !deleted,
+      DecryptedGroupMessage(:final fromUsername, :final media, :final poll, :final deleted) =>
+        fromUsername == payload.fromUsername &&
+            media == null &&
+            poll == null &&
+            !deleted,
       _ => false,
     };
     // The relay is stateless: only the original author may edit, and only
@@ -1326,7 +1507,7 @@ class ChatController extends ChangeNotifier {
       );
       if (_disposed) return;
       final parsed = parseEnvelope(plaintext);
-      if (parsed.isMedia) return;
+      if (parsed.isMedia || parsed.isPoll) return;
       final body = parsed.isText ? parsed.text! : plaintext;
       _applyEdit(
         payload.targetId,
@@ -1550,6 +1731,8 @@ class ChatController extends ChangeNotifier {
       _socket.onMessageEdited(_handleMessageEdited),
       _socket.onMessageDeleted(_handleMessageDeleted),
       _socket.onProfileUpdated(_handleProfileUpdated),
+      _socket.onPollVoted(_handlePollVoted),
+      _socket.onPollClosed(_handlePollClosed),
     ]);
   }
 
@@ -1859,12 +2042,12 @@ class ChatController extends ChangeNotifier {
     _upsert(_privateByPeer, message.peerUsername, pending.key, message);
   }
 
-  /// The mention-relevant body of a decrypted payload: null for media and
-  /// failed decryption (neither can mention anyone).
+  /// The mention-relevant body of a decrypted payload: null for media,
+  /// polls and failed decryption (none can mention anyone).
   String? _mentionBodyOf(String plaintext, {required bool decryptionFailed}) {
     if (decryptionFailed) return null;
     final parsed = parseEnvelope(plaintext);
-    if (parsed.isMedia) return null;
+    if (parsed.isMedia || parsed.isPoll) return null;
     return parsed.isText ? parsed.text : plaintext;
   }
 
@@ -1890,19 +2073,34 @@ class ChatController extends ChangeNotifier {
       isOwn: isOwn,
       decryptionFailed: decryptionFailed,
       media: unwrapped.media,
+      poll: unwrapped.poll,
     );
   }
 
   /// Envelope-unwrapped view of a decrypted payload (spec C3): a media
-  /// descriptor, a text body plus optional reply ref, or the raw string
-  /// itself for legacy / unknown envelopes.
-  static ({String? body, Map<String, dynamic>? reply, MediaDescriptor? media})
+  /// descriptor, a poll definition, a text body plus optional reply ref,
+  /// or the raw string itself for legacy / unknown envelopes.
+  static ({
+    String? body,
+    Map<String, dynamic>? reply,
+    MediaDescriptor? media,
+    PollDefinition? poll,
+  })
   _unwrapPlaintext(String plaintext, bool decryptionFailed) {
-    if (decryptionFailed) return (body: null, reply: null, media: null);
+    if (decryptionFailed) {
+      return (body: null, reply: null, media: null, poll: null);
+    }
     final parsed = parseEnvelope(plaintext);
-    if (parsed.isMedia) return (body: null, reply: null, media: parsed.media);
-    if (parsed.isText) return (body: parsed.text, reply: parsed.reply, media: null);
-    return (body: plaintext, reply: null, media: null);
+    if (parsed.isMedia) {
+      return (body: null, reply: null, media: parsed.media, poll: null);
+    }
+    if (parsed.isPoll) {
+      return (body: null, reply: parsed.reply, media: null, poll: parsed.poll);
+    }
+    if (parsed.isText) {
+      return (body: parsed.text, reply: parsed.reply, media: null, poll: null);
+    }
+    return (body: plaintext, reply: null, media: null, poll: null);
   }
 
   // ── Group message handling ─────────────────────────────────────────────
@@ -2034,6 +2232,7 @@ class ChatController extends ChangeNotifier {
       isOwn: isOwn,
       decryptionFailed: decryptionFailed,
       media: unwrapped.media,
+      poll: unwrapped.poll,
     );
   }
 

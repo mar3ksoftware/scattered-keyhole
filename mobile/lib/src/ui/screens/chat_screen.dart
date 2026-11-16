@@ -1,9 +1,14 @@
+import 'dart:io';
+
+import 'dart:typed_data';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../crypto/media_crypto.dart';
 import '../../models/models.dart';
 import '../../state/chat_controller.dart';
+import '../../state/voice_recorder.dart';
 import '../../utils/envelope.dart';
 import '../theme/app_theme.dart';
 import '../widgets/connection_status.dart';
@@ -41,6 +46,9 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Message being edited inline (C6); the composer prefills from its body.
   MessageView? _editing;
 
+  /// Voice recorder session for this conversation (spec H).
+  late final VoiceRecorderController _voice;
+
   ChatController get _controller => widget.controller;
   String? get _peer => widget.peerUsername;
   String? get _groupId => widget.groupId;
@@ -51,6 +59,18 @@ class _ChatScreenState extends State<ChatScreen> {
     final id = _groupId;
     if (id != null) return ConversationTarget.group(id);
     return null;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _voice = VoiceRecorderController(onSend: _sendVoiceFile);
+  }
+
+  @override
+  void dispose() {
+    _voice.dispose();
+    super.dispose();
   }
 
   @override
@@ -103,6 +123,7 @@ class _ChatScreenState extends State<ChatScreen> {
       excerpt: replyExcerptFor(
         view.body ?? view.text,
         mediaName: view.media?.name,
+        poll: view.poll,
       ),
     );
   }
@@ -150,11 +171,62 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _startEdit(MessageView view) {
-    if (view.id == null || view.deleted || view.media != null) return;
+    if (view.id == null || view.deleted || view.media != null || view.poll != null) {
+      return;
+    }
     setState(() {
       _editing = view;
       _reply = null;
     });
+  }
+
+  /// Sends a poll through the active conversation (spec B1); invalid
+  /// definitions send nothing and surface the composer's send error.
+  Future<bool> _sendPoll(String question, List<String> options) async {
+    final target = _target;
+    if (target == null) return false;
+    return target.isGroup
+        ? await _controller.sendGroupPoll(_groupId!, question, options)
+        : await _controller.sendPoll(_peer!, question, options);
+  }
+
+  /// Uploads a stopped voice recording as an audio attachment (spec H):
+  /// read the temp file, ship it through the media pipeline, then drop it.
+  Future<bool> _sendVoiceFile(String path, Duration duration) async {
+    final target = _target;
+    if (target == null) return false;
+    Uint8List bytes;
+    try {
+      bytes = await File(path).readAsBytes();
+    } catch (_) {
+      return false;
+    }
+    final seconds = duration.inMilliseconds / 1000;
+    try {
+      return target.isGroup
+          ? await _controller.sendGroupMediaMessage(
+              _groupId!,
+              bytes,
+              mime: 'audio/mp4',
+              name: 'voice.m4a',
+              duration: seconds,
+            )
+          : await _controller.sendMediaMessage(
+              _peer!,
+              bytes,
+              mime: 'audio/mp4',
+              name: 'voice.m4a',
+              duration: seconds,
+            );
+    } finally {
+      // The temp file has no further use once its bytes are in memory.
+      try {
+        final file = File(path);
+        if (await file.exists()) await file.delete();
+      } catch (_) {
+        // Temp cleanup never surfaces to the user.
+      }
+    }
   }
 
   /// Picks an attachment and hands it to the active conversation; a cancelled
@@ -305,6 +377,8 @@ class _ChatScreenState extends State<ChatScreen> {
                     _controller.connectionStatus == ConnectionStatus.connected,
                 onSend: _send,
                 onAttach: _attach,
+                onSendPoll: _sendPoll,
+                voiceRecorder: _voice,
                 replyAuthor: reply == null
                     ? null
                     : _controller.displayNameOf(reply.author ?? ''),
@@ -313,6 +387,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     : replyExcerptFor(
                         reply.body ?? reply.text,
                         mediaName: reply.media?.name,
+                        poll: reply.poll,
                       ),
                 onCancelReply: () => setState(() => _reply = null),
                 editingBody: editing?.body ?? editing?.text,

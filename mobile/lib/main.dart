@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:media_kit/media_kit.dart';
 
 import 'src/net/server_config.dart';
 import 'src/net/socket_service.dart';
@@ -15,6 +16,9 @@ typedef ControllerFactory = ChatController Function(String serverUrl);
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Voice playback (spec H) needs the native player libs registered before
+  // any Player is created.
+  MediaKit.ensureInitialized();
   // Light system icons over the dark app surfaces.
   SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle.light);
   // The persisted server address is resolved inside `ScatteredKeyholeApp`, which

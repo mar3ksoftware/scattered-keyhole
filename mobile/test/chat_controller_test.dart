@@ -149,6 +149,14 @@ class FakeSocketService implements SocketService {
   void sendProfileUpdate(ProfileUpdatePayload payload) =>
       _record(ChatEvents.profileUpdate, payload);
 
+  @override
+  void sendPollVote(PollVotePayload payload) =>
+      _record(ChatEvents.pollVote, payload);
+
+  @override
+  void sendPollClose(PollClosePayload payload) =>
+      _record(ChatEvents.pollClose, payload);
+
   // ── Inbound ────────────────────────────────────────────────────────────
 
   @override
@@ -331,6 +339,20 @@ class FakeSocketService implements SocketService {
   Unsubscribe onProfileUpdated(void Function(ProfileUpdatedPayload payload) handler) {
     return _register(ChatEvents.profileUpdated, (data) {
       handler(data! as ProfileUpdatedPayload);
+    });
+  }
+
+  @override
+  Unsubscribe onPollVoted(void Function(PollVotedPayload payload) handler) {
+    return _register(ChatEvents.pollVoted, (data) {
+      handler(data! as PollVotedPayload);
+    });
+  }
+
+  @override
+  Unsubscribe onPollClosed(void Function(PollClosedPayload payload) handler) {
+    return _register(ChatEvents.pollClosed, (data) {
+      handler(data! as PollClosedPayload);
     });
   }
 

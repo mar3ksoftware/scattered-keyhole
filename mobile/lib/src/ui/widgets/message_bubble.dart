@@ -5,6 +5,7 @@ import '../../state/chat_controller.dart';
 import '../../utils/mentions.dart';
 import '../theme/app_theme.dart';
 import 'media_attachment.dart';
+import 'poll_bubble.dart';
 
 /// One render-ready message, normalized from either wire model so the
 /// bubble and list only deal with a single shape.
@@ -17,6 +18,7 @@ class MessageView {
     this.author,
     this.decryptionFailed = false,
     this.media,
+    this.poll,
     this.id,
     this.body,
     this.reply,
@@ -32,6 +34,7 @@ class MessageView {
       author: message.fromUsername,
       decryptionFailed: message.decryptionFailed,
       media: message.media,
+      poll: message.poll,
       id: message.id,
       body: message.body,
       reply: message.reply,
@@ -49,6 +52,7 @@ class MessageView {
       author: message.fromUsername,
       decryptionFailed: message.decryptionFailed,
       media: message.media,
+      poll: message.poll,
       id: message.id,
       body: message.body,
       reply: message.reply,
@@ -77,6 +81,9 @@ class MessageView {
 
   /// Attachment descriptor for media messages, null for plain text.
   final MediaDescriptor? media;
+
+  /// Poll definition for poll messages, null for anything else (B1).
+  final PollDefinition? poll;
 
   /// Wire id (sender-generated UUID); null for locally constructed views.
   final String? id;
@@ -121,6 +128,7 @@ class MessageBubble extends StatelessWidget {
     this.sender,
     this.decryptionFailed = false,
     this.media,
+    this.poll,
     this.controller,
     this.id,
     this.author,
@@ -153,6 +161,7 @@ class MessageBubble extends StatelessWidget {
       author: view.author,
       decryptionFailed: view.decryptionFailed,
       media: view.media,
+      poll: view.poll,
       controller: controller,
       id: view.id,
       body: view.body,
@@ -175,6 +184,7 @@ class MessageBubble extends StatelessWidget {
   final String? author;
   final bool decryptionFailed;
   final MediaDescriptor? media;
+  final PollDefinition? poll;
   final ChatController? controller;
 
   /// Wire id — required for reactions and delete (C5/C6).
@@ -224,7 +234,12 @@ class MessageBubble extends StatelessWidget {
 
   /// Edit: own, text, not a tombstone (C6). Delete: own, not a tombstone.
   bool get _canEdit =>
-      !deleted && isOwn && media == null && !decryptionFailed && onEdit != null;
+      !deleted &&
+      isOwn &&
+      media == null &&
+      poll == null &&
+      !decryptionFailed &&
+      onEdit != null;
   bool get _canDelete => !deleted && isOwn && _hasActions;
 
   bool get _menuEnabled => _canReply || _canReact || _canEdit || _canDelete;
@@ -238,6 +253,7 @@ class MessageBubble extends StatelessWidget {
       author: author,
       decryptionFailed: decryptionFailed,
       media: media,
+      poll: poll,
       id: id,
       body: body,
       reply: reply,
@@ -331,6 +347,10 @@ class MessageBubble extends StatelessWidget {
     if (media != null && !decryptionFailed && controller != null) {
       return MediaAttachment(descriptor: media!, controller: controller!);
     }
+    final pollDefinition = poll;
+    if (pollDefinition != null && !decryptionFailed) {
+      return _pollContent(pollDefinition);
+    }
     if (decryptionFailed) {
       return Row(
         mainAxisSize: MainAxisSize.min,
@@ -365,6 +385,44 @@ class MessageBubble extends StatelessWidget {
         _replyBlock(),
         _bodyText(),
       ],
+    );
+  }
+
+  // ── Polls (B1/B3) ───────────────────────────────────────────────────
+
+  /// Props-driven poll card: tallies and the closed flag come from the
+  /// controller, the vote/close actions are routed to it as well (C3/C4).
+  Widget _pollContent(PollDefinition pollDefinition) {
+    final controller = this.controller;
+    final messageId = id;
+    final convo = _target;
+    if (controller == null || messageId == null) {
+      // Local view without a controller: render the definition read-only.
+      return PollBubble(
+        poll: pollDefinition,
+        tallies: const <String, int>{},
+        closed: false,
+        myVote: null,
+        canVote: false,
+        canClose: false,
+      );
+    }
+    final tallies = controller.pollTalliesFor(messageId);
+    final closed = controller.isPollClosed(messageId);
+    final myVote = controller.me == null
+        ? null
+        : tallies[controller.me!.username];
+    final canVote = !closed && !deleted && convo != null;
+    final canClose = isOwn && !closed && !deleted && convo != null;
+    return PollBubble(
+      poll: pollDefinition,
+      tallies: tallies,
+      closed: closed,
+      myVote: myVote,
+      canVote: canVote,
+      canClose: canClose,
+      onVote: canVote ? (option) => controller.votePoll(convo, messageId, option) : null,
+      onClose: canClose ? () => controller.closePoll(convo, messageId) : null,
     );
   }
 

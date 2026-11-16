@@ -5,5 +5,6 @@ export 'group.dart';
 export 'json_utils.dart';
 export 'media.dart';
 export 'message.dart';
+export 'poll.dart';
 export 'tier1.dart';
 export 'user.dart';

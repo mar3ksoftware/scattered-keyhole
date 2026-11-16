@@ -26,6 +26,7 @@ class MediaDescriptor {
     this.w,
     this.h,
     this.name,
+    this.d,
   });
 
   /// Parses a decoded envelope object, throwing [FormatException] when any
@@ -79,6 +80,14 @@ class MediaDescriptor {
       normalizedName = name;
     }
 
+    // Voice duration: a bad value drops the field instead of rejecting the
+    // whole message (B2) — the bubble just shows no duration.
+    final rawDuration = json['d'];
+    final duration =
+        rawDuration is num && rawDuration > 0 && rawDuration <= 300
+            ? rawDuration.toDouble()
+            : null;
+
     return MediaDescriptor(
       fileId: fileId,
       key: key,
@@ -89,6 +98,7 @@ class MediaDescriptor {
       w: w,
       h: h,
       name: normalizedName,
+      d: duration,
     );
   }
 
@@ -125,6 +135,9 @@ class MediaDescriptor {
   final int? h;
   final String? name;
 
+  /// Voice duration in seconds (B2): only kept when `0 < d <= 300`.
+  final double? d;
+
   Map<String, dynamic> toJson() => <String, dynamic>{
     't': 'media',
     'v': 1,
@@ -137,6 +150,7 @@ class MediaDescriptor {
     if (w != null) 'w': w,
     if (h != null) 'h': h,
     if (name != null) 'name': name,
+    if (d != null) 'd': d,
   };
 
   static String _readSizedBase64(Object? value, int expectedLength) {
