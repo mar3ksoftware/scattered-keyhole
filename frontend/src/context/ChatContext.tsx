@@ -1,11 +1,17 @@
 import type { ReactNode } from 'react';
 import { createContext, useCallback, useContext, useEffect, useReducer, useRef } from 'react';
+import { conversationKeyFor, conversationKeyOfMessage, relayKeyFor } from '../lib/conversation';
 import { E2eeSession } from '../lib/e2ee-session';
-import { parseEnvelope, wrapPollEnvelope, wrapTextEnvelope } from '../lib/envelope';
+import { expForTimer, parseEnvelope, wrapPollEnvelope, wrapTextEnvelope } from '../lib/envelope';
+import { applyGroupUpdated, canSaveGroupEdit, normalizeGroupInfo } from '../lib/group-meta';
 import { clearMediaCache, MediaError, prepareAndUpload } from '../lib/media';
 import { mentionsMe } from '../lib/mentions';
+import { createPendingOps } from '../lib/pending-ops';
+import { applyPin, clearPinForMessage, pinTargetState } from '../lib/pins';
 import { validateProfile } from '../lib/profile';
+import { purgeExpired, shouldStoreAtIngestion, startPurgeInterval } from '../lib/purge';
 import { getSocket } from '../lib/socket';
+import { applyDisappearing, isPresetSeconds, timerSecondsOf } from '../lib/timer';
 import type {
   ConversationTarget,
   DecryptedGroupMessage,
@@ -28,8 +34,6 @@ import { EVENTS } from '../types';
 const TYPING_REPEAT_MS = 4_000;
 // Receiver-side auto-hide: an indicator disappears even if active:false is lost.
 const TYPING_HIDE_MS = 6_000;
-// Optimistic ops roll back only if their rejection lands within this window.
-const PENDING_OP_TTL_MS = 5_000;
 
 const noopOp = () => {};
 
@@ -57,6 +61,12 @@ type ChatState = {
   readonly profiles: Readonly<Record<string, ProfileEntry>>;
   // pollId → tallies + closed flag; polls live only in ciphertext (B3).
   readonly polls: Readonly<Record<string, PollState>>;
+  // Conversation key → pinned message id (Tier-3 B): one pin slot per
+  // conversation, client-side state only — the server stores nothing.
+  readonly pins: Readonly<Record<string, string>>;
+  // DM timer seconds keyed by conversation key; group timers live on
+  // GroupInfo.disappearing so snapshots stay the single source for groups.
+  readonly dmDisappearing: Readonly<Record<string, number>>;
 };
 
 const initialState: ChatState = {
@@ -76,6 +86,8 @@ const initialState: ChatState = {
   typing: {},
   profiles: {},
   polls: {},
+  pins: {},
+  dmDisappearing: {},
 };
 
 type ChatAction =
@@ -150,11 +162,24 @@ type ChatAction =
   | {
       type: 'SET_POLL_CLOSED';
       payload: { readonly pollId: string; readonly closed: boolean };
+    }
+  | {
+      // `targetId: null` clears the slot (unpin is slot-wide, v1).
+      type: 'SET_PIN';
+      payload: { readonly key: string; readonly targetId: string | null };
+    }
+  | {
+      // Relay apply with the poll-style ignore rules (Tier-3 B).
+      type: 'APPLY_PIN_RELAY';
+      payload: { readonly key: string; readonly targetId: string; readonly pinned: boolean };
+    }
+  | { type: 'PURGE_EXPIRED'; payload: { readonly nowMs: number } }
+  | { type: 'SET_DISAPPEARING'; payload: { readonly key: string; readonly seconds: number } }
+  | {
+      // Full-state apply from group:updated; unknown groups are ignored.
+      type: 'UPDATE_GROUP';
+      payload: { readonly groupId: string; readonly name: string; readonly description: string };
     };
-
-function unreadKeyFor(target: ConversationTarget): string {
-  return target.kind === 'dm' ? `dm:${target.username}` : `group:${target.groupId}`;
-}
 
 function reducer(state: ChatState, action: ChatAction): ChatState {
   switch (action.type) {
@@ -178,6 +203,8 @@ function reducer(state: ChatState, action: ChatAction): ChatState {
         typing: {},
         profiles: {},
         polls: {},
+        pins: {},
+        dmDisappearing: {},
       };
     case 'SET_USERS':
       return { ...state, users: action.payload };
@@ -196,15 +223,17 @@ function reducer(state: ChatState, action: ChatAction): ChatState {
     case 'ADD_MESSAGE':
       return { ...state, messages: [...state.messages, action.payload] };
     case 'SET_GROUPS':
-      return { ...state, groups: action.payload };
+      // Normalized on ingress: old servers omit description/disappearing.
+      return { ...state, groups: action.payload.map(normalizeGroupInfo) };
     case 'ADD_GROUP': {
       // Full group state — re-sent on create and every membership change; replace on same id.
-      const index = state.groups.findIndex((g) => g.groupId === action.payload.groupId);
+      const incoming = normalizeGroupInfo(action.payload);
+      const index = state.groups.findIndex((g) => g.groupId === incoming.groupId);
       if (index === -1) {
-        return { ...state, groups: [...state.groups, action.payload] };
+        return { ...state, groups: [...state.groups, incoming] };
       }
       const groups = state.groups.slice();
-      groups[index] = action.payload;
+      groups[index] = incoming;
       return { ...state, groups };
     }
     case 'REMOVE_GROUP':
@@ -236,7 +265,7 @@ function reducer(state: ChatState, action: ChatAction): ChatState {
     case 'OPEN_CONVERSATION': {
       const target = action.payload;
       if (target === null) return { ...state, openConversation: null };
-      const key = unreadKeyFor(target);
+      const key = conversationKeyFor(target);
       const previous = state.unread[key];
       return {
         ...state,
@@ -340,10 +369,20 @@ function reducer(state: ChatState, action: ChatAction): ChatState {
         message.id === targetId ? { ...message, deleted } : message;
       const applyToGroupMessage = (message: DecryptedGroupMessage): DecryptedGroupMessage =>
         message.id === targetId ? { ...message, deleted } : message;
+      // A tombstoned message can no longer hold a pin (spec B).
+      let pins = state.pins;
+      if (deleted) {
+        const hit =
+          state.messages.find((m) => m.id === targetId) ??
+          state.groupMessages.find((m) => m.id === targetId);
+        if (hit !== undefined)
+          pins = clearPinForMessage(pins, conversationKeyOfMessage(hit), targetId);
+      }
       return {
         ...state,
         messages: state.messages.map(applyToMessage),
         groupMessages: state.groupMessages.map(applyToGroupMessage),
+        pins,
       };
     }
     case 'SET_POLL_VOTE': {
@@ -375,6 +414,44 @@ function reducer(state: ChatState, action: ChatAction): ChatState {
         },
       };
     }
+    case 'SET_PIN':
+      return { ...state, pins: applyPin(state.pins, action.payload.key, action.payload.targetId) };
+    case 'APPLY_PIN_RELAY': {
+      const { key, targetId, pinned } = action.payload;
+      // Unpin clears the slot whatever it pointed at (slot-wide, v1); a pin
+      // only lands when the target is present and not tombstoned.
+      const targetState = pinTargetState(key, targetId, state.messages, state.groupMessages);
+      return {
+        ...state,
+        pins: applyPin(state.pins, key, pinned ? targetId : null, targetState),
+      };
+    }
+    case 'PURGE_EXPIRED': {
+      const slice = {
+        messages: state.messages,
+        groupMessages: state.groupMessages,
+        unread: state.unread,
+        pins: state.pins,
+      };
+      const next = purgeExpired(slice, action.payload.nowMs);
+      // Same slice back means nothing expired: keep the state reference.
+      if (next === slice) return state;
+      return { ...state, ...next };
+    }
+    case 'SET_DISAPPEARING': {
+      const { key, seconds } = action.payload;
+      const next = applyDisappearing(
+        { groups: state.groups, dmDisappearing: state.dmDisappearing },
+        key,
+        seconds,
+      );
+      if (next.groups === state.groups && next.dmDisappearing === state.dmDisappearing) {
+        return state;
+      }
+      return { ...state, groups: next.groups, dmDisappearing: next.dmDisappearing };
+    }
+    case 'UPDATE_GROUP':
+      return { ...state, groups: applyGroupUpdated(state.groups, action.payload) };
     default:
       return state;
   }
@@ -390,17 +467,36 @@ function bodyOfPlaintext(
   readonly reply: ReplyRef | null;
   readonly media: DecryptedMessage['media'];
   readonly poll: DecryptedMessage['poll'];
+  readonly expiresAt: number | null;
 } {
   // Poll questions stay out of `body` on purpose: unread/mention parsing
   // never sees them (C5), and the reply excerpt reads `poll.question`.
-  if (decryptionFailed) return { body: '', reply: null, media: null, poll: null };
+  if (decryptionFailed) {
+    return { body: '', reply: null, media: null, poll: null, expiresAt: null };
+  }
   const parsed = parseEnvelope(plaintext);
-  if (parsed.kind === 'media')
-    return { body: '', reply: null, media: parsed.descriptor, poll: null };
-  if (parsed.kind === 'text')
-    return { body: parsed.body, reply: parsed.reply, media: null, poll: null };
-  if (parsed.kind === 'poll') return { body: '', reply: null, media: null, poll: parsed.poll };
-  return { body: parsed.text, reply: null, media: null, poll: null };
+  if (parsed.kind === 'media') {
+    return {
+      body: '',
+      reply: null,
+      media: parsed.descriptor,
+      poll: null,
+      expiresAt: parsed.expiresAt,
+    };
+  }
+  if (parsed.kind === 'text') {
+    return {
+      body: parsed.body,
+      reply: parsed.reply,
+      media: null,
+      poll: null,
+      expiresAt: parsed.expiresAt,
+    };
+  }
+  if (parsed.kind === 'poll') {
+    return { body: '', reply: null, media: null, poll: parsed.poll, expiresAt: parsed.expiresAt };
+  }
+  return { body: parsed.text, reply: null, media: null, poll: null, expiresAt: parsed.expiresAt };
 }
 
 function buildDecryptedMessage(
@@ -426,6 +522,8 @@ function buildDecryptedMessage(
     decryptionFailed,
     media: unwrapped.media,
     poll: unwrapped.poll,
+    // `expiresAt` is optional: absent when the envelope carried no valid `exp`.
+    ...(unwrapped.expiresAt !== null ? { expiresAt: unwrapped.expiresAt } : {}),
   };
 }
 
@@ -457,6 +555,8 @@ function buildDecryptedGroupMessage(
     decryptionFailed,
     media: unwrapped.media,
     poll: unwrapped.poll,
+    // `expiresAt` is optional: absent when the envelope carried no valid `exp`.
+    ...(unwrapped.expiresAt !== null ? { expiresAt: unwrapped.expiresAt } : {}),
   };
 }
 
@@ -530,7 +630,7 @@ export type ChatContextValue = {
   readonly groupMessages: readonly DecryptedGroupMessage[];
   readonly directory: readonly string[];
   readonly kickTallies: readonly KickTally[];
-  readonly createGroup: (name: string, members: readonly string[]) => void;
+  readonly createGroup: (name: string, members: readonly string[], description?: string) => void;
   readonly sendGroupMessage: (
     groupId: string,
     body: string,
@@ -574,6 +674,16 @@ export type ChatContextValue = {
   readonly votePoll: (target: ConversationTarget, pollId: string, option: number) => void;
   readonly closePoll: (target: ConversationTarget, pollId: string) => void;
   readonly updateProfile: (displayName: string, status: string) => void;
+  // ── Tier-3 features (A/B/C) ──
+  // Conversation key → pinned message id; one slot per conversation.
+  readonly pins: Readonly<Record<string, string>>;
+  // DM conversation key → timer seconds; group timers live on GroupInfo.
+  readonly dmDisappearing: Readonly<Record<string, number>>;
+  readonly sendPin: (target: ConversationTarget, targetId: string, pinned: boolean) => void;
+  readonly setDisappearing: (target: ConversationTarget, seconds: number) => void;
+  readonly updateGroup: (groupId: string, name: string, description: string) => void;
+  // Public expiry seam (spec C): called by the 10 s sweeper and by tests.
+  readonly purgeExpired: (nowMs?: number) => void;
 };
 
 export const ChatContext = createContext<ChatContextValue | null>(null);
@@ -602,11 +712,6 @@ function friendlyReason(reason: string): string {
   return FRIENDLY_REASONS[reason] ?? reason;
 }
 
-type PendingOp = {
-  readonly at: number;
-  readonly undo: () => void;
-};
-
 export function ChatProvider({ children }: { readonly children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState);
   const socketRef = useRef(getSocket());
@@ -630,9 +735,11 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
   // shared rate-limit bucket.
   const lastReceiptRef = useRef<Record<string, number>>({});
   // Optimistic reacts/edits/deletes/profiles awaiting a possible rejection;
-  // message_rejected carries no correlation id, so replies are matched FIFO-ish
-  // by recency within a short window.
-  const pendingOpsRef = useRef<PendingOp[]>([]);
+  // message_rejected carries no correlation id, so replies are matched
+  // newest-first within a short window (lib/pending-ops owns the rules).
+  const pendingOps = useRef(createPendingOps()).current;
+  const enqueueOp = pendingOps.enqueue;
+  const runLatestPendingOp = pendingOps.runLatest;
 
   stateRef.current = state;
 
@@ -645,23 +752,6 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
       errorTimerRef.current = null;
       dispatch({ type: 'SET_ERROR', payload: null });
     }, 5000);
-  }, []);
-
-  const enqueueOp = useCallback((undo: () => void) => {
-    const now = Date.now();
-    const fresh = pendingOpsRef.current.filter((op) => now - op.at <= PENDING_OP_TTL_MS);
-    fresh.push({ at: now, undo });
-    pendingOpsRef.current = fresh;
-  }, []);
-
-  const runLatestPendingOp = useCallback(() => {
-    const now = Date.now();
-    const fresh = pendingOpsRef.current.filter((op) => now - op.at <= PENDING_OP_TTL_MS);
-    pendingOpsRef.current = fresh;
-    // Newest first: a rejection lands within one round-trip of its emit, so
-    // the most recent pending op is almost always the one being rejected.
-    const op = fresh.pop();
-    if (op !== undefined) op.undo();
   }, []);
 
   const connectIfNeeded = useCallback(() => {
@@ -777,12 +867,12 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
     stopTyping();
     clearTypingTimers();
     dispatch({ type: 'CLEAR_TYPING' });
-    pendingOpsRef.current = [];
+    pendingOps.clear();
     lastReceiptRef.current = {};
     socketRef.current.disconnect();
     e2eeRef.current = new E2eeSession();
     dispatch({ type: 'LOGOUT' });
-  }, [clearTypingTimers, stopTyping]);
+  }, [clearTypingTimers, pendingOps, stopTyping]);
 
   // Highest timestamp of a message received from this peer (C2 upTo).
   const computeUpTo = useCallback((peer: string): number | undefined => {
@@ -1021,6 +1111,13 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
     [enqueueOp],
   );
 
+  // Conversation timer in seconds driving every outgoing `exp` stamp (spec C):
+  // groups read GroupInfo.disappearing, DMs the client-side timer map.
+  const timerSecondsFor = useCallback((target: ConversationTarget): number => {
+    const snapshot = stateRef.current;
+    return timerSecondsOf(snapshot.groups, snapshot.dmDisappearing, target);
+  }, []);
+
   const sendEncrypted = useCallback(
     async (toUsername: string, plaintext: string): Promise<boolean> => {
       if (toUsername === stateRef.current.user?.username) return false;
@@ -1049,15 +1146,35 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
   );
 
   // Text sends always go out as a v2 envelope; media keeps its own descriptor.
+  // A live conversation timer stamps `exp` at wrap time (spec C).
   const sendMessage = useCallback(
     (toUsername: string, body: string, reply?: ReplyRef | null): Promise<boolean> => {
-      return sendEncrypted(toUsername, wrapTextEnvelope(body, reply ?? null));
+      const exp = expForTimer(timerSecondsFor({ kind: 'dm', username: toUsername }), Date.now());
+      return sendEncrypted(toUsername, wrapTextEnvelope(body, reply ?? null, exp));
     },
-    [sendEncrypted],
+    [sendEncrypted, timerSecondsFor],
   );
 
-  const createGroup = useCallback((name: string, members: readonly string[]) => {
-    socketRef.current.emit(EVENTS.CLIENT.GROUP_CREATE, { name, members });
+  const createGroup = useCallback(
+    (name: string, members: readonly string[], description?: string) => {
+      socketRef.current.emit(EVENTS.CLIENT.GROUP_CREATE, {
+        name,
+        members,
+        ...(description !== undefined && description.length > 0 ? { description } : {}),
+      });
+    },
+    [],
+  );
+
+  // No optimistic apply for metadata: `group:updated` carries full state to
+  // every member including the actor (spec A).
+  const updateGroup = useCallback((groupId: string, name: string, description: string) => {
+    if (!canSaveGroupEdit(name, description)) return;
+    socketRef.current.emit(EVENTS.CLIENT.GROUP_UPDATE, {
+      groupId,
+      name: name.trim(),
+      description,
+    });
   }, []);
 
   const addMember = useCallback((groupId: string, username: string) => {
@@ -1070,6 +1187,54 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
 
   const voteKick = useCallback((groupId: string, username: string) => {
     socketRef.current.emit(EVENTS.CLIENT.GROUP_KICK_VOTE, { groupId, username });
+  }, []);
+
+  // Optimistic pin/unpin (spec B): apply locally, roll back if the server
+  // rejects with message_rejected. A pin never leaves the client when the
+  // target is missing or tombstoned.
+  const sendPin = useCallback(
+    (target: ConversationTarget, targetId: string, pinned: boolean) => {
+      const key = conversationKeyFor(target);
+      const snapshot = stateRef.current;
+      if (
+        pinned &&
+        pinTargetState(key, targetId, snapshot.messages, snapshot.groupMessages) !== 'present'
+      ) {
+        return;
+      }
+      const previous = snapshot.pins[key];
+      enqueueOp(() => dispatch({ type: 'SET_PIN', payload: { key, targetId: previous ?? null } }));
+      dispatch({ type: 'SET_PIN', payload: { key, targetId: pinned ? targetId : null } });
+      socketRef.current.emit(EVENTS.CLIENT.MESSAGE_PIN, {
+        ...scopePayload(target),
+        targetId,
+        pinned,
+      });
+    },
+    [enqueueOp],
+  );
+
+  // Timer change (spec C): preset-guarded, optimistic, rollback on rejection.
+  const setDisappearing = useCallback(
+    (target: ConversationTarget, seconds: number) => {
+      if (!isPresetSeconds(seconds)) return;
+      const key = conversationKeyFor(target);
+      const previous = timerSecondsFor(target);
+      if (previous === seconds) return;
+      enqueueOp(() => dispatch({ type: 'SET_DISAPPEARING', payload: { key, seconds: previous } }));
+      dispatch({ type: 'SET_DISAPPEARING', payload: { key, seconds } });
+      socketRef.current.emit(EVENTS.CLIENT.DISAPPEARING_SET, {
+        ...scopePayload(target),
+        seconds,
+      });
+    },
+    [enqueueOp, timerSecondsFor],
+  );
+
+  // One sweep of the expiry timer; exported so tests can drive it with a
+  // fake clock instead of waiting for the interval (spec C).
+  const purgeExpiredNow = useCallback((nowMs: number = Date.now()) => {
+    dispatch({ type: 'PURGE_EXPIRED', payload: { nowMs } });
   }, []);
 
   const sendGroupEncrypted = useCallback(
@@ -1123,31 +1288,43 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
 
   const sendGroupMessage = useCallback(
     (groupId: string, body: string, reply?: ReplyRef | null): Promise<boolean> => {
-      return sendGroupEncrypted(groupId, wrapTextEnvelope(body, reply ?? null));
+      const exp = expForTimer(timerSecondsFor({ kind: 'group', groupId }), Date.now());
+      return sendGroupEncrypted(groupId, wrapTextEnvelope(body, reply ?? null, exp));
     },
-    [sendGroupEncrypted],
+    [sendGroupEncrypted, timerSecondsFor],
   );
 
+  // Media descriptors are serialized as-is, so `exp` rides along as one more
+  // top-level field the parser reads (spec C: every wrap gains `exp`).
   const prepareMediaEnvelope = useCallback(
-    async (file: File, durationSeconds?: number): Promise<string | null> => {
+    async (
+      file: File,
+      target: ConversationTarget,
+      durationSeconds?: number,
+    ): Promise<string | null> => {
       try {
         const descriptor = await prepareAndUpload(
           file,
           mediaTokenRef.current ?? '',
           durationSeconds,
         );
-        return JSON.stringify(descriptor);
+        const exp = expForTimer(timerSecondsFor(target), Date.now());
+        return JSON.stringify(exp !== undefined ? { ...descriptor, exp } : descriptor);
       } catch (error) {
         showError(error instanceof MediaError ? error.message : 'Upload failed. Please try again.');
         return null;
       }
     },
-    [showError],
+    [showError, timerSecondsFor],
   );
 
   const sendMediaMessage = useCallback(
     async (toUsername: string, file: File, durationSeconds?: number): Promise<boolean> => {
-      const envelope = await prepareMediaEnvelope(file, durationSeconds);
+      const envelope = await prepareMediaEnvelope(
+        file,
+        { kind: 'dm', username: toUsername },
+        durationSeconds,
+      );
       if (envelope === null) return false;
       // Media descriptors stay unwrapped — the parser branches on t first.
       return sendEncrypted(toUsername, envelope);
@@ -1157,7 +1334,11 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
 
   const sendGroupMediaMessage = useCallback(
     async (groupId: string, file: File, durationSeconds?: number): Promise<boolean> => {
-      const envelope = await prepareMediaEnvelope(file, durationSeconds);
+      const envelope = await prepareMediaEnvelope(
+        file,
+        { kind: 'group', groupId },
+        durationSeconds,
+      );
       if (envelope === null) return false;
       return sendGroupEncrypted(groupId, envelope);
     },
@@ -1167,20 +1348,22 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
   // Polls ride the normal message:send path; only the envelope shape differs.
   const sendPollMessage = useCallback(
     (toUsername: string, question: string, options: readonly string[]): Promise<boolean> => {
-      const envelope = wrapPollEnvelope(question, options);
+      const exp = expForTimer(timerSecondsFor({ kind: 'dm', username: toUsername }), Date.now());
+      const envelope = wrapPollEnvelope(question, options, exp);
       if (envelope === null) return Promise.resolve(false);
       return sendEncrypted(toUsername, envelope);
     },
-    [sendEncrypted],
+    [sendEncrypted, timerSecondsFor],
   );
 
   const sendGroupPollMessage = useCallback(
     (groupId: string, question: string, options: readonly string[]): Promise<boolean> => {
-      const envelope = wrapPollEnvelope(question, options);
+      const exp = expForTimer(timerSecondsFor({ kind: 'group', groupId }), Date.now());
+      const envelope = wrapPollEnvelope(question, options, exp);
       if (envelope === null) return Promise.resolve(false);
       return sendGroupEncrypted(groupId, envelope);
     },
-    [sendGroupEncrypted],
+    [sendGroupEncrypted, timerSecondsFor],
   );
 
   useEffect(() => {
@@ -1278,7 +1461,7 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
     const handleWindowFocus = () => {
       const open = stateRef.current.openConversation;
       if (open === null) return;
-      dispatch({ type: 'CLEAR_UNREAD', payload: unreadKeyFor(open) });
+      dispatch({ type: 'CLEAR_UNREAD', payload: conversationKeyFor(open) });
       if (open.kind === 'dm' && appIsFocused()) {
         const upTo = computeUpTo(open.username);
         if (upTo !== undefined) sendReadReceipt(open.username, upTo);
@@ -1428,11 +1611,14 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
       e2eeRef.current.decrypt(decryptWith, msg.ciphertext, msg.iv).then(
         (plaintext) => {
           const built = buildDecryptedMessage(msg, plaintext, false, isOwn);
+          // exp <= now at ingestion drops the message entirely (spec C).
+          if (!shouldStoreAtIngestion(built.expiresAt, Date.now())) return;
           dispatch({ type: 'ADD_MESSAGE', payload: built });
           noteIncomingDm(msg, built, isOwn);
         },
         () => {
           const built = buildDecryptedMessage(msg, '[Decryption failed]', true, isOwn);
+          if (!shouldStoreAtIngestion(built.expiresAt, Date.now())) return;
           dispatch({ type: 'ADD_MESSAGE', payload: built });
           noteIncomingDm(msg, built, isOwn);
         },
@@ -1496,11 +1682,13 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
       e2eeRef.current.decrypt(msg.fromUsername, myEntry.ciphertext, myEntry.iv).then(
         (plaintext) => {
           const built = buildDecryptedGroupMessage(msg, plaintext, false, isOwn);
+          if (!shouldStoreAtIngestion(built.expiresAt, Date.now())) return;
           dispatch({ type: 'ADD_GROUP_MESSAGE', payload: built });
           noteIncomingGroup(msg.groupId, built, isOwn);
         },
         () => {
           const built = buildDecryptedGroupMessage(msg, '[Decryption failed]', true, isOwn);
+          if (!shouldStoreAtIngestion(built.expiresAt, Date.now())) return;
           dispatch({ type: 'ADD_GROUP_MESSAGE', payload: built });
           noteIncomingGroup(msg.groupId, built, isOwn);
         },
@@ -1661,6 +1849,34 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
       });
     });
 
+    // ── Tier-3 events (A/B/C) ──
+
+    socket.on(EVENTS.SERVER.MESSAGE_PINNED, (payload) => {
+      const key = relayKeyFor(payload, stateRef.current.user?.username);
+      if (key === null) return;
+      dispatch({
+        type: 'APPLY_PIN_RELAY',
+        payload: { key, targetId: payload.targetId, pinned: payload.pinned },
+      });
+    });
+
+    socket.on(EVENTS.SERVER.DISAPPEARING_CHANGED, (payload) => {
+      const key = relayKeyFor(payload, stateRef.current.user?.username);
+      if (key === null) return;
+      dispatch({ type: 'SET_DISAPPEARING', payload: { key, seconds: payload.seconds } });
+    });
+
+    socket.on(EVENTS.SERVER.GROUP_UPDATED, (payload) => {
+      dispatch({
+        type: 'UPDATE_GROUP',
+        payload: {
+          groupId: payload.groupId,
+          name: payload.name,
+          description: payload.description,
+        },
+      });
+    });
+
     socket.connect();
 
     return () => {
@@ -1682,6 +1898,10 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
       }
     };
   }, [clearTypingTimers, computeUpTo, runLatestPendingOp, sendReadReceipt, showError, stopTyping]);
+
+  // One expiry sweeper per client (spec C): 10 s cadence over the public
+  // purgeExpired seam; the cleanup is the interval's disposer.
+  useEffect(() => startPurgeInterval((nowMs) => purgeExpiredNow(nowMs)), [purgeExpiredNow]);
 
   const value: ChatContextValue = {
     user: state.user,
@@ -1724,6 +1944,12 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
     votePoll,
     closePoll,
     updateProfile,
+    pins: state.pins,
+    dmDisappearing: state.dmDisappearing,
+    sendPin,
+    setDisappearing,
+    updateGroup,
+    purgeExpired: purgeExpiredNow,
   };
 
   return <ChatContext value={value}>{children}</ChatContext>;

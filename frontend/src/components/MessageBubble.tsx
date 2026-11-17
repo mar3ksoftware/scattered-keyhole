@@ -2,8 +2,11 @@ import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useChat } from '../context/ChatContext';
+import { conversationKeyFor } from '../lib/conversation';
 import { replyExcerptFor } from '../lib/envelope';
 import { splitMentions } from '../lib/mentions';
+import { isAdminOf } from '../lib/permissions';
+import { pinMenuLabel } from '../lib/pins';
 import type {
   ConversationTarget,
   DecryptedGroupMessage,
@@ -13,6 +16,7 @@ import type {
 import { REACTION_EMOJIS } from '../types';
 import { LinkifiedText } from './LinkifiedText';
 import { MediaAttachment } from './MediaAttachment';
+import { MessageActionMenu } from './MessageActionMenu';
 import { PollBubble } from './PollBubble';
 
 type MessageBubbleProps = {
@@ -101,6 +105,9 @@ export function MessageBubble({ message, showSender, onReply }: MessageBubblePro
     toggleReaction,
     editMessage,
     deleteMessage,
+    groups,
+    pins,
+    sendPin,
   } = useChat();
 
   const [menuOpen, setMenuOpen] = useState(false);
@@ -155,6 +162,15 @@ export function MessageBubble({ message, showSender, onReply }: MessageBubblePro
   const canReply = !isDeleted;
   const canReact = !isDeleted;
 
+  // Pin entries (spec B): visible only to users who may pin, and only on a
+  // live message — the slot's current target gets the unpin label.
+  const conversationKey = conversationKeyFor(target);
+  const isPinned = pins[conversationKey] === message.id;
+  const pinLabel = pinMenuLabel(
+    isPinned,
+    !isDeleted && isAdminOf(groups, user?.username ?? null, target),
+  );
+
   const reactionAgg = reactions[message.id] ?? {};
   const pills = REACTION_EMOJIS.filter((emoji) => (reactionAgg[emoji] ?? []).length > 0);
 
@@ -201,6 +217,12 @@ export function MessageBubble({ message, showSender, onReply }: MessageBubblePro
     setMenuOpen(false);
   };
 
+  const handlePinToggle = () => {
+    setMenuOpen(false);
+    // Pinned slot -> unpin; any other message -> pin (replace is the rule).
+    sendPin(target, message.id, !isPinned);
+  };
+
   const submitEdit = async () => {
     const trimmed = draft.trim();
     if (trimmed.length === 0) return;
@@ -222,53 +244,30 @@ export function MessageBubble({ message, showSender, onReply }: MessageBubblePro
     : splitMentions(message.body, Array.from(knownUsernames), myUsername, isGroup);
 
   const menuItems = (
-    <>
-      <button
-        type="button"
-        onClick={handleReply}
-        disabled={!canReply}
-        className="w-full px-3 py-1.5 text-left text-sm text-zinc-200 hover:bg-zinc-800/70 rounded-md disabled:opacity-40"
-      >
-        Reply
-      </button>
-      <button
-        type="button"
-        onClick={() => {
-          setMenuOpen(false);
-          setPickerOpen(true);
-        }}
-        disabled={!canReact}
-        className="w-full px-3 py-1.5 text-left text-sm text-zinc-200 hover:bg-zinc-800/70 rounded-md disabled:opacity-40"
-      >
-        React
-      </button>
-      {canEdit && (
-        <button
-          type="button"
-          onClick={startEdit}
-          className="w-full px-3 py-1.5 text-left text-sm text-zinc-200 hover:bg-zinc-800/70 rounded-md"
-        >
-          Edit
-        </button>
-      )}
-      {canDelete && (
-        <button
-          type="button"
-          onClick={() => {
-            setMenuOpen(false);
-            setConfirmingDelete(true);
-          }}
-          className="w-full px-3 py-1.5 text-left text-sm text-rose-400 hover:bg-zinc-800/70 rounded-md"
-        >
-          Delete
-        </button>
-      )}
-    </>
+    <MessageActionMenu
+      canReply={canReply}
+      canReact={canReact}
+      canEdit={canEdit}
+      canDelete={canDelete}
+      pinLabel={pinLabel}
+      onReply={handleReply}
+      onReact={() => {
+        setMenuOpen(false);
+        setPickerOpen(true);
+      }}
+      onEdit={startEdit}
+      onDelete={() => {
+        setMenuOpen(false);
+        setConfirmingDelete(true);
+      }}
+      onPin={handlePinToggle}
+    />
   );
 
   return (
     <div
       ref={rootRef}
+      id={`message-${message.id}`}
       className={`group flex flex-col gap-0.5 ${isOwn ? 'items-end' : 'items-start'}`}
     >
       {!isOwn && (showSender === true || isGroup) && (

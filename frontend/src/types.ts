@@ -43,10 +43,12 @@ export type ReplyRef = {
 };
 
 // Envelope v2: plaintext of newly sent text messages is discriminated JSON.
+// `exp` is the optional Tier-3 expiry stamp (epoch ms) inside the ciphertext.
 export type TextEnvelope = {
   readonly t: 'text';
   readonly b: string;
   readonly r?: ReplyRef;
+  readonly exp?: number;
 };
 
 // Poll definition carried inside the E2EE plaintext (B1) — the server only
@@ -55,6 +57,7 @@ export type PollEnvelope = {
   readonly t: 'poll';
   readonly q: string;
   readonly o: readonly string[];
+  readonly exp?: number;
 };
 
 // Decrypted poll definition attached to a message for the UI.
@@ -64,11 +67,22 @@ export type PollDefinition = {
 };
 
 // Result of the ordered envelope parse (C3): media → text → poll → legacy raw.
+// `expiresAt` carries a valid `exp` (epoch ms) or null when absent/malformed —
+// a malformed field is dropped, never rejected (drop-never-reject, as with `d`).
 export type ParsedEnvelope =
-  | { readonly kind: 'media'; readonly descriptor: MediaDescriptor }
-  | { readonly kind: 'text'; readonly body: string; readonly reply: ReplyRef | null }
-  | { readonly kind: 'poll'; readonly poll: PollDefinition }
-  | { readonly kind: 'raw'; readonly text: string };
+  | {
+      readonly kind: 'media';
+      readonly descriptor: MediaDescriptor;
+      readonly expiresAt: number | null;
+    }
+  | {
+      readonly kind: 'text';
+      readonly body: string;
+      readonly reply: ReplyRef | null;
+      readonly expiresAt: number | null;
+    }
+  | { readonly kind: 'poll'; readonly poll: PollDefinition; readonly expiresAt: number | null }
+  | { readonly kind: 'raw'; readonly text: string; readonly expiresAt: number | null };
 
 // Decrypted view of a PrivateMessage (what the UI renders)
 export type DecryptedMessage = {
@@ -88,6 +102,8 @@ export type DecryptedMessage = {
   readonly decryptionFailed: boolean;
   readonly media: MediaDescriptor | null;
   readonly poll: PollDefinition | null;
+  // Tier-3 C: present only when the envelope carried a valid `exp`.
+  readonly expiresAt?: number;
 };
 
 // ── Media types ──
@@ -127,9 +143,20 @@ export type GroupMember = {
 export type GroupInfo = {
   readonly groupId: string;
   readonly name: string;
+  // Tier-3 A: defaults applied on ingress for pre-Tier-3 servers.
+  readonly description: string;
+  // Tier-3 C: conversation timer in seconds (0 = off).
+  readonly disappearing: number;
   readonly members: readonly GroupMember[];
   readonly createdBy: string;
   readonly createdAt: number;
+};
+
+// Wire shape tolerated from old servers: the two Tier-3 fields may be
+// absent in JSON and are normalized to '' / 0 before they reach state.
+export type GroupInfoJson = Omit<GroupInfo, 'description' | 'disappearing'> & {
+  readonly description?: string;
+  readonly disappearing?: number;
 };
 
 export type GroupEncryptedPayload = {
@@ -170,6 +197,8 @@ export type DecryptedGroupMessage = {
   readonly decryptionFailed: boolean;
   readonly media: MediaDescriptor | null;
   readonly poll: PollDefinition | null;
+  // Tier-3 C: present only when the envelope carried a valid `exp`.
+  readonly expiresAt?: number;
 };
 
 export type GroupTargetPayload = {
@@ -315,6 +344,55 @@ export type PollClosedPayload = {
   readonly groupId?: string;
 };
 
+// ── Tier-3 payloads ──
+// Mirrors backend/src/types.ts one-for-one (spec A/B/C).
+
+export type GroupUpdatePayload = {
+  readonly groupId: string;
+  readonly name?: string;
+  readonly description?: string;
+};
+
+// Full-state apply: both fields travel together so clients overwrite the
+// pair and ignore groups they do not know.
+export type GroupUpdatedPayload = {
+  readonly groupId: string;
+  readonly name: string;
+  readonly description: string;
+  readonly u: string;
+  readonly timestamp: number;
+};
+
+export type MessagePinPayload = {
+  readonly to?: string;
+  readonly groupId?: string;
+  readonly targetId: string;
+  readonly pinned: boolean;
+};
+
+export type MessagePinnedPayload = {
+  readonly targetId: string;
+  readonly pinned: boolean;
+  readonly u: string;
+  readonly to?: string;
+  readonly groupId?: string;
+};
+
+export type DisappearingSetPayload = {
+  readonly to?: string;
+  readonly groupId?: string;
+  readonly seconds: number;
+};
+
+// `u` rides relays (the acting username); the join-time heal emit carries
+// only the timer and the peer, so clients must treat `u` as optional.
+export type DisappearingChangedPayload = {
+  readonly seconds: number;
+  readonly u?: string;
+  readonly to?: string;
+  readonly groupId?: string;
+};
+
 // ── Client-side poll state ──
 
 // pollId → voter username → chosen option index (last write wins), plus the
@@ -401,6 +479,10 @@ export const CONSTANTS = {
   MAX_MEDIA_BYTES: 16 * 1024 * 1024,
   MAX_DISPLAY_NAME_LENGTH: 32,
   MAX_STATUS_LENGTH: 80,
+  MAX_GROUP_NAME_LENGTH: 50,
+  MAX_GROUP_DESCRIPTION_LENGTH: 256,
+  // Tier-3 C presets, in seconds — the settings UI offers exactly these.
+  DISAPPEARING_PRESETS: [0, 86400, 604800, 2592000],
 } as const;
 
 // ── Socket event maps ──
@@ -411,7 +493,12 @@ export type ClientToServerEvents = {
   'user:login': (payload: LoginPayload) => void;
   'message:send': (payload: EncryptedMessagePayload) => void;
   'e2ee:public_key': (payload: E2eePublicKeyPayload) => void;
-  'group:create': (payload: { readonly name: string; readonly members: readonly string[] }) => void;
+  'group:create': (payload: {
+    readonly name: string;
+    readonly members: readonly string[];
+    readonly description?: string;
+  }) => void;
+  'group:update': (payload: GroupUpdatePayload) => void;
   'group:message:send': (payload: GroupEncryptedPayload) => void;
   'group:member:add': (payload: GroupTargetPayload) => void;
   'group:member:remove': (payload: GroupTargetPayload) => void;
@@ -421,6 +508,8 @@ export type ClientToServerEvents = {
   'message:react': (payload: MessageReactPayload) => void;
   'message:edit': (payload: MessageEditPayload) => void;
   'message:delete': (payload: MessageDeletePayload) => void;
+  'message:pin': (payload: MessagePinPayload) => void;
+  'disappearing:set': (payload: DisappearingSetPayload) => void;
   'poll:vote': (payload: PollVotePayload) => void;
   'poll:close': (payload: PollClosePayload) => void;
   'profile:update': (payload: ProfileUpdatePayload) => void;
@@ -442,6 +531,7 @@ export type ServerToClientEvents = {
   'e2ee:public_key': (payload: E2eePublicKeyRelay) => void;
   'group:created': (payload: GroupInfo) => void;
   'group:created_error': (payload: { readonly message: string }) => void;
+  'group:updated': (payload: GroupUpdatedPayload) => void;
   'group:message': (payload: GroupMessage) => void;
   'group:message_delivery_failed': (payload: { readonly message: string }) => void;
   'users:directory': (usernames: readonly string[]) => void;
@@ -453,6 +543,8 @@ export type ServerToClientEvents = {
   'message:reacted': (payload: MessageReactedPayload) => void;
   'message:edited': (payload: MessageEditedPayload) => void;
   'message:deleted': (payload: MessageDeletedPayload) => void;
+  'message:pinned': (payload: MessagePinnedPayload) => void;
+  'disappearing:changed': (payload: DisappearingChangedPayload) => void;
   'poll:voted': (payload: PollVotedPayload) => void;
   'poll:closed': (payload: PollClosedPayload) => void;
   'profile:updated': (payload: ProfileUpdatedPayload) => void;
@@ -468,6 +560,7 @@ export const EVENTS = {
     USER_LOGIN: 'user:login',
     E2EE_PUBLIC_KEY: 'e2ee:public_key',
     GROUP_CREATE: 'group:create',
+    GROUP_UPDATE: 'group:update',
     GROUP_MESSAGE_SEND: 'group:message:send',
     GROUP_MEMBER_ADD: 'group:member:add',
     GROUP_MEMBER_REMOVE: 'group:member:remove',
@@ -477,6 +570,8 @@ export const EVENTS = {
     MESSAGE_REACT: 'message:react',
     MESSAGE_EDIT: 'message:edit',
     MESSAGE_DELETE: 'message:delete',
+    MESSAGE_PIN: 'message:pin',
+    DISAPPEARING_SET: 'disappearing:set',
     POLL_VOTE: 'poll:vote',
     POLL_CLOSE: 'poll:close',
     PROFILE_UPDATE: 'profile:update',
@@ -497,6 +592,7 @@ export const EVENTS = {
     E2EE_PUBLIC_KEY: 'e2ee:public_key',
     GROUP_CREATED: 'group:created',
     GROUP_CREATED_ERROR: 'group:created_error',
+    GROUP_UPDATED: 'group:updated',
     GROUP_MESSAGE: 'group:message',
     GROUP_MESSAGE_DELIVERY_FAILED: 'group:message_delivery_failed',
     USERS_DIRECTORY: 'users:directory',
@@ -508,6 +604,8 @@ export const EVENTS = {
     MESSAGE_REACTED: 'message:reacted',
     MESSAGE_EDITED: 'message:edited',
     MESSAGE_DELETED: 'message:deleted',
+    MESSAGE_PINNED: 'message:pinned',
+    DISAPPEARING_CHANGED: 'disappearing:changed',
     POLL_VOTED: 'poll:voted',
     POLL_CLOSED: 'poll:closed',
     PROFILE_UPDATED: 'profile:updated',
