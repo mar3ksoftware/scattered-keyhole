@@ -28,6 +28,9 @@ Projekt sklada sie z trzech czesci: backendu na Bun (port 3000), aplikacji webow
 - **Reakcje.** Reakcje emoji na wiadomosciach z zagregowanymi licznikami.
 - **Odpowiedzi i edycja.** Cytowanie wiadomosci oraz edycja wlasnego tekstu ze znacznikiem `(edited)`.
 - **Usuniecie dla wszystkich.** Tombstone dowolnej wyslanej wiadomosci.
+- **Wiadomosci znikajace.** Timer per rozmowa (wylaczone, 24 h, 7 dni, 30 dni) dodaje do kazdej wiadomosci date wygasniecia; wygasle wiadomosci sa usuwane po stronie klienta co 10 s.
+- **Przypiete wiadomosci.** Jedna przypieta wiadomosc na rozmowe, widoczna w banerze z akcja odepnij.
+- **Opisy grup.** Opcjonalny opis grupy pokazywany w naglowku rozmowy.
 - **Liczniki nieprzeczytanych i wzmianki.** Liczniki nieprzeczytanych per rozmowa z podswietleniami `@username`.
 - **Ankiety.** Pytanie z 2-10 opcjami; czlonkowie glosuja i widza na zywo procenty, a autor moze zamknac ankiete.
 - **Wiadomosci glosowe.** Nagrywanie do 5 minut audio w polu wprowadzania; szyfrowane jak kazdy zalacznik i odtwarzane w miejscu.
@@ -288,6 +291,7 @@ Scattered Keyhole/
 | `src/account-store.ts` | Trwalosc SQLite przez `bun:sqlite`, bcrypt przez `Bun.password` |
 | `src/user-directory.ts` | Zbior zarejestrowanych kont i nazw gosci (czlonkowie grup offline) |
 | `src/group-store.ts` | Grupy i czlonkostwo w pamieci |
+| `src/dm-settings-store.ts` | Ustawienia timera znikania dla wiadomosci prywatnych (odtwarzane przy dolaczeniu) |
 | `src/kick-vote-store.ts` | Jedno aktywne glosowanie na wyrzucenie na grupe, TTL 60 s |
 | `src/user-registry.ts` | Sledzenie aktywnych uzytkownikow w pamieci, TTL 30 s po rozlaczeniu |
 | `src/rate-limiter.ts` | Token bucket - 10 zapytan/s na socket |
@@ -331,6 +335,7 @@ Scattered Keyhole/
 | `lib/src/crypto/e2ee_session.dart` | Zarzadzanie kluczami wspoldzielonymi dla kazdego peera |
 | `lib/src/crypto/media_crypto.dart` | Szyfrowanie pojedynczego pliku (klucz pliku + IV, SHA-256) |
 | `lib/src/models/` | Modele protokolu: user, group, message, media, poll, auth, errors |
+| `lib/src/utils/` | Czyste helpery decyzyjne: exp w kopercie, przypinanie, usuwanie wygaslych, timer, metadane grup, klucze rozmow |
 | `lib/src/ui/` | Ekrany (logowanie, powloka czatu, lista rozmow) i widgety |
 
 ### Kontrakt zdarzen Socket.io
@@ -346,7 +351,10 @@ Pelne typy leza w `backend/src/types.ts`; klient Flutter powtarza nazwy w `lib/s
 | `e2ee:public_key` | Wyslanie wlasnego klucza publicznego ECDH do jednego peera |
 | `message:send` | Przekazanie jednej zaszyfrowanej wiadomosci prywatnej (`to`, `ciphertext`, `iv`) |
 | `group:create` | Utworzenie grupy: nazwa plus listy nazw czlonkow (uzytkownicy offline tez moga sie trafic) |
+| `group:update` | Aktualizacja metadanych grupy (nazwa + opis) - tylko dla adminow |
 | `group:member:add`, `group:member:remove` | Zmiany czlonkostwa tylko dla adminow |
+| `message:pin` | Przypiecie lub odpiecie pojedynczej wiadomosci w rozmowie (w grupach tylko dla adminow) |
+| `disappearing:set` | Ustawienie timera znikania wiadomosci dla rozmowy (w grupach tylko dla adminow) |
 | `group:kick:vote` | Glosowanie na wyrzucenie czlonka (wymagana wiekszosc, okno 60 s) |
 | `group:message:send` | Wiadomosc grupowa: osobny szyfr dla kazdego czlonka, dla ktorego nadawca ma klucz wspoldzielony |
 | `typing:send` | Stan wskazywania pisania dla wiadomosci prywatnej lub grupowej |
@@ -369,6 +377,9 @@ Pelne typy leza w `backend/src/types.ts`; klient Flutter powtarza nazwy w `lib/s
 | `private_message` | Wiadomosc prywatna wylacznie z szyfrem |
 | `group:message` | Wiadomosc grupowa z szyframi dla poszczegolnych czlonkow |
 | `group:created`, `group:created_error`, `group:message_delivery_failed`, `group:member:removed`, `group:kick:tally` | Cykl zycia grupy, zmiany czlonkostwa, na zywo liczace sie glosy (`active` / `passed` / `expired`) |
+| `group:updated` | Pelny stan grupy po edycji metadanych (nazwa, opis, timer znikania) |
+| `message:pinned` | Przypiecie/odpiecie przekazane wszystkim czlonkom oprocz nadawcy (jeden slot na rozmowe) |
+| `disappearing:changed` | Zmiana timera przekazana peerom; odtwarzana przy dolaczeniu dla wiadomosci prywatnych |
 | `typing:changed` | Kto aktualnie pisze w rozmowie (wysylane wszystkim oprocz piszacego) |
 | `receipt:read` | Peer przeczytal wiadomosci do podanego znacznika czasu |
 | `message:reacted` | Reakcja dodana lub usunieta (emoji i nazwy uzytkownikow, do wszystkich oprocz autora) |
@@ -452,7 +463,7 @@ Serwer nigdy nie przechowuje: tresci wiadomosci (E2EE, tylko przekaz) ani stanu 
 
 Znane ograniczenia, zaakceptowane przez projekt:
 
-- **Serwer widzi metadane.** Nazwy uzytkownikow, czlonkostwo w grupach, obecnosc i klucze publiczne e2ee sa dla serwera widoczne, bo to on jest przekaznikiem. TLS chroni je tylko przed obserwatorami sieci - nie przed operatorem serwera.
+- **Serwer widzi metadane.** Nazwy uzytkownikow, czlonkostwo w grupach, obecnosc, klucze publiczne e2ee, nazwy i opisy grup oraz ustawienia timera znikania wiadomosci sa dla serwera widoczne, bo to on jest przekaznikiem. TLS chroni je tylko przed obserwatorami sieci - nie przed operatorem serwera.
 - **Brak kolejki wiadomosci offline.** Wiadomosci adresowane do uzytkownika offline nie sa buforowane; nadawca dostaje blad dostarczenia, dokladnie jak wczesniej.
 - **Nieaktualna tozsamosc goscia.** Jesli nazwa goscia zostanie pozniej zarejestrowana jako konto, wiersze grup utworzone, gdy byla goscia, zachowuja stary guest userId i nie sa migrowane. Nowe lookupy rozwiazuja juz na konto.
 - **Brak automatyzacji certyfikatow.** Certyfikaty TLS trzeba odnawiac zewnetrznie.
@@ -498,7 +509,7 @@ cd mobile
 RUN_LIVE_E2E=1 flutter test test/e2e_live_test.dart
 ```
 
-Testy steruja prawdziwymi klientami `ChatController` podlaczonymi do dzialajacego backendu i sprawdzaja dwukierunkowe wiadomosci E2EE miedzy dwoch klientami, czlonkostwo w grupie (zaproszenie osoby offline, usuniecie przez admina, przeglosowane wyrzucenie, katalog uzytkownikow) pelny obieg zalacznika (wysylka -> deskryptor przez E2EE -> pobranie -> porownanie bajt po bajcie), cykl zycia ankiety (utworzenie, glos, zmiana glosu, zamkniecie) oraz obieg wiadomosci glosowej z deskryptorem czasu trwania. Zmienna `SERVER_URL` zmienia adres serwera (domyslnie `http://localhost:3000`).
+Testy steruja prawdziwymi klientami `ChatController` podlaczonymi do dzialajacego backendu i sprawdzaja dwukierunkowe wiadomosci E2EE miedzy dwoch klientami, czlonkostwo w grupie (zaproszenie osoby offline, usuniecie przez admina, przeglosowane wyrzucenie, katalog uzytkownikow) pelny obieg zalacznika (wysylka -> deskryptor przez E2EE -> pobranie -> porownanie bajt po bajcie), cykl zycia ankiety (utworzenie, glos, zmiana glosu, zamkniecie), obieg wiadomosci glosowej z deskryptorem czasu trwania oraz Tier-3: edycje metadanych grupy (admin + odrzucenie nie-admina), przypinanie (admin + odrzucenie czlonka) i timery znikania z `expiresAt ~= now + 86400000` dla rozmow prywatnych i grupowych. Zmienna `SERVER_URL` zmienia adres serwera (domyslnie `http://localhost:3000`).
 
 ## Stack technologiczny
 
