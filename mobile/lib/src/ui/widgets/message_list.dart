@@ -19,6 +19,10 @@ class MessageList extends StatefulWidget {
     this.readUpTo = 0,
     this.onReply,
     this.onEdit,
+    this.onPin,
+    this.onUnpin,
+    this.canPin = false,
+    this.pinnedMessageId,
   });
 
   final List<MessageView> messages;
@@ -42,6 +46,12 @@ class MessageList extends StatefulWidget {
 
   /// Edit action bubbling up to the composer (C6).
   final void Function(MessageView view)? onEdit;
+
+  /// Pin/unpin actions.
+  final void Function(MessageView view)? onPin;
+  final void Function(MessageView view)? onUnpin;
+  final bool canPin;
+  final String? pinnedMessageId;
 
   @override
   State<MessageList> createState() => _MessageListState();
@@ -160,6 +170,10 @@ class _MessageListState extends State<MessageList> {
             segments: _segmentsFor(message),
             onReply: widget.onReply,
             onEdit: widget.onEdit,
+            onPin: widget.onPin,
+            onUnpin: widget.onUnpin,
+            canPin: widget.canPin,
+            isPinnedMessage: message.id != null && message.id == widget.pinnedMessageId,
           ),
         );
       },

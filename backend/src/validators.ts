@@ -52,10 +52,21 @@ const e2eePublicKeyPayloadSchema = z.strictObject({
 
 const groupCreatePayloadSchema = z.strictObject({
   name: z.string().min(1).max(CONSTANTS.MAX_GROUP_NAME_LENGTH),
+  description: z.string().max(CONSTANTS.MAX_GROUP_DESCRIPTION_LENGTH).default(''),
   members: z
     .array(z.string().min(1).max(CONSTANTS.MAX_USERNAME_LENGTH))
     .max(CONSTANTS.MAX_GROUP_MEMBERS),
 });
+
+const groupUpdatePayloadSchema = z
+  .strictObject({
+    groupId: z.string().min(1),
+    name: z.string().min(1).max(CONSTANTS.MAX_GROUP_NAME_LENGTH).optional(),
+    description: z.string().max(CONSTANTS.MAX_GROUP_DESCRIPTION_LENGTH).optional(),
+  })
+  .refine((payload) => payload.name !== undefined || payload.description !== undefined, {
+    message: 'at least one of "name" or "description" must be set',
+  });
 
 const groupMessagePayloadSchema = z.strictObject({
   id: uuidSchema,
@@ -138,6 +149,22 @@ const messageDeletePayloadSchema = z
   .strictObject({
     ...conversationTargetFields,
     targetId: uuidSchema,
+  })
+  .refine(exactlyOneTarget, { message: exactlyOneTargetMessage });
+
+const messagePinPayloadSchema = z
+  .strictObject({
+    ...conversationTargetFields,
+    targetId: uuidSchema,
+    pinned: z.boolean(),
+  })
+  .refine(exactlyOneTarget, { message: exactlyOneTargetMessage });
+
+// Mirrors CONSTANTS.DISAPPEARING_PRESETS: off / 24 hours / 7 days / 30 days.
+const disappearingSetPayloadSchema = z
+  .strictObject({
+    ...conversationTargetFields,
+    seconds: z.union([z.literal(0), z.literal(86400), z.literal(604800), z.literal(2592000)]),
   })
   .refine(exactlyOneTarget, { message: exactlyOneTargetMessage });
 
@@ -243,10 +270,18 @@ export function validateE2eePublicKeyPayload(
   return toValidationResult(e2eePublicKeyPayloadSchema, input);
 }
 
-export function validateGroupCreatePayload(
-  input: unknown,
-): ValidationResult<{ readonly name: string; readonly members: readonly string[] }> {
+export function validateGroupCreatePayload(input: unknown): ValidationResult<{
+  readonly name: string;
+  readonly description: string;
+  readonly members: readonly string[];
+}> {
   return toValidationResult(groupCreatePayloadSchema, input);
+}
+
+export function validateGroupUpdatePayload(
+  input: unknown,
+): ValidationResult<z.infer<typeof groupUpdatePayloadSchema>> {
+  return toValidationResult(groupUpdatePayloadSchema, input);
 }
 
 export function validateGroupMessagePayload(input: unknown): ValidationResult<{
@@ -295,6 +330,18 @@ export function validateMessageDeletePayload(
   input: unknown,
 ): ValidationResult<z.infer<typeof messageDeletePayloadSchema>> {
   return toValidationResult(messageDeletePayloadSchema, input);
+}
+
+export function validateMessagePinPayload(
+  input: unknown,
+): ValidationResult<z.infer<typeof messagePinPayloadSchema>> {
+  return toValidationResult(messagePinPayloadSchema, input);
+}
+
+export function validateDisappearingSetPayload(
+  input: unknown,
+): ValidationResult<z.infer<typeof disappearingSetPayloadSchema>> {
+  return toValidationResult(disappearingSetPayloadSchema, input);
 }
 
 export function validatePollVotePayload(

@@ -1,10 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useChat } from '../context/ChatContext';
+import { conversationKeyFor } from '../lib/conversation';
+import { replyExcerptFor } from '../lib/envelope';
+import { isAdminOf } from '../lib/permissions';
 import type { ConversationTarget, ReplyRef } from '../types';
 import { ChatHeader } from './ChatHeader';
+import { EditGroupModal } from './EditGroupModal';
 import { GroupMembersPanel } from './GroupMembersPanel';
 import { MessageInput } from './MessageInput';
 import { MessageList } from './MessageList';
+import { PinBanner } from './PinBanner';
 
 type ChatAreaProps = {
   readonly selectedUser: string | null;
@@ -32,8 +37,14 @@ export function ChatArea({ selectedUser, selectedGroup, onBack, showBack }: Chat
     displayNameOf,
     sendTyping,
     stopTyping,
+    pins,
+    dmDisappearing,
+    sendPin,
+    setDisappearing,
+    updateGroup,
   } = useChat();
   const [showMembers, setShowMembers] = useState(false);
+  const [editingGroup, setEditingGroup] = useState(false);
   const [reply, setReply] = useState<ReplyRef | null>(null);
 
   useEffect(() => {
@@ -44,10 +55,12 @@ export function ChatArea({ selectedUser, selectedGroup, onBack, showBack }: Chat
     }
   }, [selectedGroup]);
 
-  // Conversation switched (C1): drop any live typing burst and pending reply.
+  // Conversation switched (C1): drop any live typing burst, pending reply
+  // and any open group edit form.
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-run on conversation switch
   useEffect(() => {
     setReply(null);
+    setEditingGroup(false);
     stopTyping();
   }, [selectedUser, selectedGroup, stopTyping]);
 
@@ -132,12 +145,46 @@ export function ChatArea({ selectedUser, selectedGroup, onBack, showBack }: Chat
   }, [typing, selectedUser, selectedGroup, selectedGroupInfo, user, displayNameOf]);
 
   // DM header: display name with username fallback; status as subtitle when
-  // non-empty (C9). Group header keeps the group name.
+  // non-empty (C9). Group header keeps the group name, with the Tier-3
+  // description below it when one is set (spec A).
   const dmDisplayName = selectedUser !== null ? displayNameOf(selectedUser) : null;
   const dmStatus = selectedUser !== null ? (profiles[selectedUser]?.status ?? '') : '';
   const displayName = selectedGroupInfo?.name ?? dmDisplayName;
+  const groupDescription = selectedGroupInfo?.description ?? '';
   const subtitle =
-    selectedGroupInfo !== undefined ? 'Group' : dmStatus.length > 0 ? dmStatus : undefined;
+    selectedGroupInfo !== undefined
+      ? groupDescription.length > 0
+        ? groupDescription
+        : 'Group'
+      : dmStatus.length > 0
+        ? dmStatus
+        : undefined;
+
+  // Tier-3: who may change this conversation's settings (admin in groups,
+  // either participant in DMs) and the current timer value.
+  const canAdmin =
+    conversationTarget !== null && user !== null
+      ? isAdminOf(groups, user.username, conversationTarget)
+      : false;
+  const timerSeconds =
+    conversationTarget === null
+      ? 0
+      : conversationTarget.kind === 'group'
+        ? (selectedGroupInfo?.disappearing ?? 0)
+        : (dmDisappearing[`dm:${conversationTarget.username}`] ?? 0);
+
+  // Pin banner (spec B): excerpt of the slot's message via the existing
+  // reply-excerpt helper, best-effort scroll on click.
+  const pinnedId =
+    conversationTarget !== null ? pins[conversationKeyFor(conversationTarget)] : undefined;
+  const pinnedMessage =
+    pinnedId !== undefined ? filteredMessages.find((m) => m.id === pinnedId) : undefined;
+  const revealPinned = () => {
+    if (pinnedId === undefined) return;
+    document
+      .getElementById(`message-${pinnedId}`)
+      ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
 
   const mentionSuggestions =
     selectedGroupInfo !== undefined ? selectedGroupInfo.members.map((m) => m.username) : undefined;
@@ -153,6 +200,17 @@ export function ChatArea({ selectedUser, selectedGroup, onBack, showBack }: Chat
         onMembersClick={
           selectedGroupInfo !== undefined ? () => setShowMembers((v) => !v) : undefined
         }
+        timerSeconds={timerSeconds}
+        timerDisabled={conversationTarget?.kind === 'group' && !canAdmin}
+        onSelectTimer={
+          conversationTarget !== null
+            ? (seconds) => setDisappearing(conversationTarget, seconds)
+            : undefined
+        }
+        canEditGroup={selectedGroupInfo !== undefined && canAdmin}
+        onEditGroup={
+          selectedGroupInfo !== undefined && canAdmin ? () => setEditingGroup(true) : undefined
+        }
       />
       {displayName == null ? (
         <div className="flex-1 flex items-center justify-center">
@@ -160,6 +218,22 @@ export function ChatArea({ selectedUser, selectedGroup, onBack, showBack }: Chat
         </div>
       ) : (
         <>
+          {pinnedMessage !== undefined && (
+            <PinBanner
+              excerpt={replyExcerptFor(
+                pinnedMessage.body,
+                pinnedMessage.media ?? null,
+                pinnedMessage.poll ?? null,
+              )}
+              canUnpin={canAdmin}
+              onUnpin={() => {
+                if (pinnedId !== undefined && conversationTarget !== null) {
+                  sendPin(conversationTarget, pinnedId, false);
+                }
+              }}
+              onOpen={revealPinned}
+            />
+          )}
           <MessageList messages={filteredMessages} onReply={setReply} />
           <div className="min-h-6 px-5 pt-1 text-xs text-zinc-500" aria-live="polite">
             {typingNames.length > 0 && `${typingNames.join(', ')} is typing…`}
@@ -180,6 +254,16 @@ export function ChatArea({ selectedUser, selectedGroup, onBack, showBack }: Chat
       )}
       {showMembers && selectedGroupInfo !== undefined && (
         <GroupMembersPanel group={selectedGroupInfo} onClose={() => setShowMembers(false)} />
+      )}
+      {editingGroup && selectedGroupInfo !== undefined && (
+        <EditGroupModal
+          group={selectedGroupInfo}
+          onSave={(name, description) => {
+            updateGroup(selectedGroupInfo.groupId, name, description);
+            setEditingGroup(false);
+          }}
+          onClose={() => setEditingGroup(false)}
+        />
       )}
     </div>
   );

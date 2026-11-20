@@ -2,6 +2,7 @@ import type { Logger } from 'pino';
 import type { Server as IoServer, Socket } from 'socket.io';
 
 import type { AccountStore } from './account-store';
+import type { DmSettingsStore } from './dm-settings-store';
 import type { GroupStore } from './group-store';
 import type { KickVoteStore } from './kick-vote-store';
 import type { MediaAuth } from './media-auth';
@@ -20,15 +21,18 @@ import { CONSTANTS, EVENTS, GroupId, UserId as makeUserId, SocketId } from './ty
 import type { UserDirectory } from './user-directory';
 import type { UserRegistry } from './user-registry';
 import {
+  validateDisappearingSetPayload,
   validateE2eePublicKeyPayload,
   validateGroupCreatePayload,
   validateGroupMessagePayload,
   validateGroupTargetPayload,
+  validateGroupUpdatePayload,
   validateLoginPayload,
   validateMessageDeletePayload,
   validateMessageEditPayload,
   validateMessageId,
   validateMessagePayload,
+  validateMessagePinPayload,
   validateMessageReactPayload,
   validatePollClosePayload,
   validatePollVotePayload,
@@ -73,6 +77,7 @@ export function createServer(
   kickVoteStore: KickVoteStore,
   mediaAuth: MediaAuth,
   profileStore: ProfileStore,
+  dmSettingsStore: DmSettingsStore,
   logger: Logger,
 ): void {
   const pendingRegistrations = new Set<string>();
@@ -118,6 +123,16 @@ export function createServer(
       }
     }
     socket.emit(EVENTS.SERVER.MEDIA_TOKEN, { token: mediaAuth.issue(userId) });
+
+    // DM timers have no snapshot event of their own: replay every entry
+    // involving this user so a restarted client relearns its timers.
+    for (const entry of dmSettingsStore.forUser(userId)) {
+      const peer = entry.userA.id === userId ? entry.userB : entry.userA;
+      socket.emit(EVENTS.SERVER.DISAPPEARING_CHANGED, {
+        seconds: entry.seconds,
+        to: peer.name,
+      });
+    }
   };
 
   // Membership is read when this runs, so cancellation tallies still reach the
@@ -481,7 +496,11 @@ export function createServer(
         return;
       }
 
-      const group = groupStore.createGroup(valResult.data.name, creator);
+      const group = groupStore.createGroup(
+        valResult.data.name,
+        creator,
+        valResult.data.description,
+      );
 
       for (const invitee of invitees) {
         const resolved = userDirectory.resolve(invitee);
@@ -497,6 +516,56 @@ export function createServer(
       }
 
       logger.info({ groupId: group.groupId, name: group.name }, 'group created');
+    });
+
+    socket.on(EVENTS.CLIENT.GROUP_UPDATE, (payload) => {
+      const rlResult = rateLimiters.check(socket.id);
+      if (!rlResult.allowed) {
+        socket.emit(EVENTS.SERVER.MESSAGE_REJECTED, { reason: 'Rate limit exceeded' });
+        return;
+      }
+
+      const valResult = validateGroupUpdatePayload(payload);
+      if (!valResult.success) {
+        socket.emit(EVENTS.SERVER.MESSAGE_REJECTED, { reason: valResult.errors.join(', ') });
+        return;
+      }
+
+      const sender = userRegistry.getUserBySocketId(SocketId(socket.id));
+      if (sender === undefined) return;
+
+      const resolved = resolveConversation(sender, valResult.data);
+      if (resolved.reason !== undefined) {
+        socket.emit(EVENTS.SERVER.MESSAGE_REJECTED, { reason: resolved.reason });
+        return;
+      }
+      if (resolved.conversation.kind !== 'group') return;
+
+      const senderMember = resolved.conversation.members.find((m) => m.userId === sender.userId);
+      if (senderMember?.isAdmin !== true) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Only admins can update group info' });
+        return;
+      }
+
+      const updated = groupStore.updateGroup(GroupId(valResult.data.groupId), {
+        name: valResult.data.name,
+        description: valResult.data.description,
+      });
+      if (updated === undefined) return;
+
+      // Full-state apply to every member including the actor: clients replace
+      // both fields and skip optimistic updates.
+      for (const member of updated.members) {
+        io.to(String(member.userId)).emit(EVENTS.SERVER.GROUP_UPDATED, {
+          groupId: valResult.data.groupId,
+          name: updated.name,
+          description: updated.description,
+          u: sender.username,
+          timestamp: Date.now(),
+        });
+      }
+
+      logger.info({ groupId: updated.groupId, name: updated.name }, 'group updated');
     });
 
     socket.on(EVENTS.CLIENT.GROUP_MEMBER_ADD, (payload) => {
@@ -974,6 +1043,50 @@ export function createServer(
       });
     });
 
+    socket.on(EVENTS.CLIENT.MESSAGE_PIN, (payload) => {
+      const rlResult = rateLimiters.check(socket.id);
+      if (!rlResult.allowed) {
+        socket.emit(EVENTS.SERVER.MESSAGE_REJECTED, { reason: 'Rate limit exceeded' });
+        return;
+      }
+
+      const valResult = validateMessagePinPayload(payload);
+      if (!valResult.success) {
+        socket.emit(EVENTS.SERVER.MESSAGE_REJECTED, { reason: valResult.errors.join(', ') });
+        return;
+      }
+
+      const sender = userRegistry.getUserBySocketId(SocketId(socket.id));
+      if (sender === undefined) return;
+
+      const resolved = resolveConversation(sender, valResult.data);
+      if (resolved.reason !== undefined) {
+        socket.emit(EVENTS.SERVER.MESSAGE_REJECTED, { reason: resolved.reason });
+        return;
+      }
+
+      // Pins are stored nowhere: the relay is the state, so the gate rides
+      // message_rejected for the actor's optimistic rollback.
+      if (resolved.conversation.kind === 'group') {
+        const senderMember = resolved.conversation.members.find((m) => m.userId === sender.userId);
+        if (senderMember?.isAdmin !== true) {
+          socket.emit(EVENTS.SERVER.MESSAGE_REJECTED, {
+            reason: 'Only admins can pin messages',
+          });
+          return;
+        }
+      }
+
+      fanOutExceptSender(sender.userId, resolved.conversation, (room) => {
+        io.to(room).emit(EVENTS.SERVER.MESSAGE_PINNED, {
+          targetId: valResult.data.targetId,
+          pinned: valResult.data.pinned,
+          u: sender.username,
+          ...scopeOf(resolved.conversation),
+        });
+      });
+    });
+
     socket.on(EVENTS.CLIENT.POLL_VOTE, (payload) => {
       const rlResult = rateLimiters.check(socket.id);
       if (!rlResult.allowed) {
@@ -1037,6 +1150,57 @@ export function createServer(
           pollId: valResult.data.pollId,
           u: sender.username,
           ...scopeOf(resolved.conversation),
+        });
+      });
+    });
+
+    socket.on(EVENTS.CLIENT.DISAPPEARING_SET, (payload) => {
+      const rlResult = rateLimiters.check(socket.id);
+      if (!rlResult.allowed) {
+        socket.emit(EVENTS.SERVER.MESSAGE_REJECTED, { reason: 'Rate limit exceeded' });
+        return;
+      }
+
+      const valResult = validateDisappearingSetPayload(payload);
+      if (!valResult.success) {
+        socket.emit(EVENTS.SERVER.MESSAGE_REJECTED, { reason: valResult.errors.join(', ') });
+        return;
+      }
+
+      const sender = userRegistry.getUserBySocketId(SocketId(socket.id));
+      if (sender === undefined) return;
+
+      const resolved = resolveConversation(sender, valResult.data);
+      if (resolved.reason !== undefined) {
+        socket.emit(EVENTS.SERVER.MESSAGE_REJECTED, { reason: resolved.reason });
+        return;
+      }
+      const conversation = resolved.conversation;
+      const seconds = valResult.data.seconds;
+
+      if (conversation.kind === 'group') {
+        const senderMember = conversation.members.find((m) => m.userId === sender.userId);
+        if (senderMember?.isAdmin !== true) {
+          socket.emit(EVENTS.SERVER.MESSAGE_REJECTED, {
+            reason: 'Only admins can change disappearing messages',
+          });
+          return;
+        }
+        groupStore.setDisappearing(conversation.groupId, seconds);
+      } else {
+        dmSettingsStore.set(
+          { id: sender.userId, name: sender.username },
+          { id: conversation.peer.userId, name: conversation.peer.username },
+          seconds,
+        );
+      }
+
+      // The actor applies the timer optimistically; a rejection rolls back.
+      fanOutExceptSender(sender.userId, conversation, (room) => {
+        io.to(room).emit(EVENTS.SERVER.DISAPPEARING_CHANGED, {
+          seconds,
+          u: sender.username,
+          ...scopeOf(conversation),
         });
       });
     });

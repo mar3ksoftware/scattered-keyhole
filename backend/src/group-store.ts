@@ -9,7 +9,7 @@ export class GroupStore {
     this.#groups = new Map();
   }
 
-  createGroup(name: string, creator: UserInfo): GroupInfo {
+  createGroup(name: string, creator: UserInfo, description = ''): GroupInfo {
     const groupId = makeGroupId(randomUUID());
     const creatorMember: GroupMember = {
       userId: creator.userId,
@@ -19,12 +19,40 @@ export class GroupStore {
     const group: GroupInfo = {
       groupId,
       name,
+      description,
+      disappearing: 0,
       members: [creatorMember],
       createdBy: creator.userId,
       createdAt: Date.now(),
     };
     this.#groups.set(groupId, group);
     return group;
+  }
+
+  // Partial edit: only the provided fields change, the rest is carried over.
+  updateGroup(
+    groupId: GroupId,
+    patch: { readonly name?: string | undefined; readonly description?: string | undefined },
+  ): GroupInfo | undefined {
+    const group = this.#groups.get(groupId);
+    if (group === undefined) return undefined;
+
+    const updated: GroupInfo = {
+      ...group,
+      name: patch.name ?? group.name,
+      description: patch.description ?? group.description,
+    };
+    this.#groups.set(groupId, updated);
+    return updated;
+  }
+
+  setDisappearing(groupId: GroupId, seconds: number): GroupInfo | undefined {
+    const group = this.#groups.get(groupId);
+    if (group === undefined) return undefined;
+
+    const updated: GroupInfo = { ...group, disappearing: seconds };
+    this.#groups.set(groupId, updated);
+    return updated;
   }
 
   getGroup(groupId: GroupId): GroupInfo | undefined {

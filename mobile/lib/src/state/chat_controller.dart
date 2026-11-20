@@ -15,6 +15,7 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
@@ -25,9 +26,13 @@ import '../crypto/media_crypto.dart';
 import '../models/models.dart';
 import '../net/media_client.dart';
 import '../net/socket_service.dart';
+import '../utils/conversation_keys.dart';
 import '../utils/envelope.dart';
+import '../utils/group_meta.dart';
 import '../utils/mentions.dart';
+import '../utils/pins.dart';
 import '../utils/profile.dart';
+import '../utils/purge.dart' as purge;import '../utils/timer.dart';
 import '../utils/uuid.dart';
 
 /// Connection lifecycle as observed by the UI.
@@ -135,7 +140,7 @@ class ChatController extends ChangeNotifier {
     this.typingHideDelay = const Duration(milliseconds: 6000),
   }) : _e2ee = e2ee ?? E2eeSession() {
     _listen();
-    _socket.connect();
+    connect();
   }
 
   /// Convenience constructor that owns a real [IoSocketService] connected to
@@ -262,6 +267,16 @@ class ChatController extends ChangeNotifier {
   /// `message_rejected`; rollbacks are matched newest-first within the TTL.
   final List<_PendingOp> _pendingOps = <_PendingOp>[];
 
+  // ── Tier-3 state ──────────────────────────────────────────────────────
+
+  /// Pinned message id per conversation key (single slot, client-side).
+  Map<String, String> _pinned = <String, String>{};
+
+  /// DM disappearing timers keyed `dm:<peer>` (seconds).
+  Map<String, int> _dmDisappearing = <String, int>{};
+
+  /// Periodic expiry sweeper (spec C).
+  Timer? _purgeTimer;
   /// Whether the app currently has focus (C7's background rule).
   bool _appFocused = true;
 
@@ -363,6 +378,22 @@ class ChatController extends ChangeNotifier {
   /// Status text for [username]; '' when unset (C9).
   String statusOf(String username) => _profiles[username]?.status ?? '';
 
+  // ── Tier-3 getters ────────────────────────────────────────────────────
+
+  /// Pinned message id for [key], when one is set.
+  String? pinnedMessageId(String key) => _pinned[key];
+
+  /// All pinned slots (conversation key -> message id).
+  Map<String, String> get pins => Map<String, String>.unmodifiable(_pinned);
+
+  /// DM disappearing timers (key `dm:<peer>` -> seconds).
+  Map<String, int> get dmDisappearing =>
+      Map<String, int>.unmodifiable(_dmDisappearing);
+
+  /// Timer seconds currently in force for [target].
+  int timerSecondsFor(ConversationTarget target) =>
+      timerSecondsOf(_groups, _dmDisappearing, target);
+
   /// Usernames currently typing in the DM [peer] or group [groupId], in
   /// roster order; our own name is never included (C1).
   List<String> typingUsernamesIn({String? peer, String? groupId}) {
@@ -409,6 +440,13 @@ class ChatController extends ChangeNotifier {
   /// Opens the socket. Called once at startup; reconnects are automatic.
   void connect() {
     _socket.connect();
+    if (Platform.environment['FLUTTER_TEST'] == 'true') return;
+    _purgeTimer ??= Timer.periodic(
+      const Duration(milliseconds: purge.purgeIntervalMs),
+      (_) {
+        if (!_disposed) purgeExpired(DateTime.now().millisecondsSinceEpoch);
+      },
+    );
   }
 
   void _ensureConnected() {
@@ -480,6 +518,8 @@ class ChatController extends ChangeNotifier {
     _profiles.clear();
     _lastSentReceipt.clear();
     _pendingOps.clear();
+    _pinned = <String, String>{};
+    _dmDisappearing = <String, int>{};
     _mediaToken = null;
     _mediaByFileId.clear();
     _mediaInFlight.clear();
@@ -530,6 +570,97 @@ class ChatController extends ChangeNotifier {
     _socket.sendGroupCreate(GroupCreatePayload(name: name, members: members));
   }
 
+  /// Sends `group:update` (metadata). No optimistic apply: the server relays
+  /// full state to every member including the actor (spec A). [name] is
+  /// trimmed before the validity check, mirroring the web form.
+  void updateGroup(String groupId, String name, String description) {
+    if (!canSaveGroupEdit(name, description)) return;
+    _socket.sendGroupUpdate(
+      GroupUpdatePayload(groupId: groupId, name: name.trim(), description: description),
+    );
+  }
+
+  /// Optimistically pins/unpins [targetId] in the single slot of the
+  /// conversation named by [key], rolling back on `message_rejected`.
+  void sendPin(String key, String targetId, bool pin) {
+    if (pin) {
+      final state = pinTargetState(
+        key,
+        targetId,
+        _allPrivateMessages(),
+        _allGroupMessages(),
+      );
+      if (state != PinTargetState.present) return;
+    }
+    final previous = _pinned[key];
+    _enqueueOp(() {
+      _pinned = applyPin(_pinned, key, previous);
+      _notify();
+    });
+    _pinned = applyPin(_pinned, key, pin ? targetId : null);
+    _socket.sendPin(
+      MessagePinPayload(
+        to: key.startsWith('dm:') ? key.substring('dm:'.length) : null,
+        groupId: key.startsWith('group:') ? key.substring('group:'.length) : null,
+        targetId: targetId,
+        pinned: pin,
+      ),
+    );
+    _notify();
+  }
+
+  /// Optimistically changes the disappearing timer for the conversation named
+  /// by [key], rolling back on `message_rejected`.
+  void setDisappearing(String key, int seconds) {
+    if (!isPresetSeconds(seconds)) return;
+    final target = key.startsWith('group:')
+        ? ConversationTarget.group(key.substring('group:'.length))
+        : ConversationTarget.dm(key.substring('dm:'.length));
+    final previous = timerSecondsOf(_groups, _dmDisappearing, target);
+    if (previous == seconds) return;
+    _enqueueOp(() {
+      _applyDisappearing(key, previous);
+      _notify();
+    });
+    _applyDisappearing(key, seconds);
+    _socket.sendDisappearingSet(
+      DisappearingSetPayload(
+        to: target.isDm ? target.username : null,
+        groupId: target.isGroup ? target.groupId : null,
+        seconds: seconds,
+      ),
+    );
+    _notify();
+  }
+
+  /// One sweep of the expiry timer (spec C); exposed for tests with a fake
+  /// clock.
+  void purgeExpired(int nowMs) {
+    final allPrivate = _allPrivateMessages();
+    final allGroup = _allGroupMessages();
+    final slice = purge.PurgableState(
+      messages: allPrivate,
+      groupMessages: allGroup,
+      unread: Map<String, UnreadEntry>.from(_unread),
+      pins: Map<String, String>.from(_pinned),
+    );
+    final next = purge.purgeExpired(slice, nowMs);
+    if (identical(next, slice)) return;
+    _unread
+      ..clear()
+      ..addAll(next.unread);
+    _pinned = Map<String, String>.from(next.pins);
+    final keptPrivate = next.messages.map((m) => m.id).toSet();
+    final keptGroup = next.groupMessages.map((m) => m.id).toSet();
+    for (final bucket in _privateByPeer.values) {
+      bucket.removeWhere((entry) => !keptPrivate.contains(entry.value.id));
+    }
+    for (final bucket in _groupByGroup.values) {
+      bucket.removeWhere((entry) => !keptGroup.contains(entry.value.id));
+    }
+    _notify();
+  }
+
   /// Sends `group:member:add` — the server enforces the admin rules.
   void addMember(String groupId, String username) {
     _socket.sendGroupMemberAdd(
@@ -561,7 +692,13 @@ class ChatController extends ChangeNotifier {
     String toUsername,
     String body, {
     Map<String, dynamic>? reply,
-  }) => _sendEncrypted(toUsername, wrapTextEnvelope(body, reply));
+  }) {
+    final exp = expForTimer(
+      timerSecondsOf(_groups, _dmDisappearing, ConversationTarget.dm(toUsername)),
+      DateTime.now().millisecondsSinceEpoch,
+    );
+    return _sendEncrypted(toUsername, wrapTextEnvelope(body, reply, exp));
+  }
 
   /// Low-level `message:send` for an already-wrapped plaintext (media
   /// descriptors stay unwrapped — the parser branches on `t` first).
@@ -600,7 +737,13 @@ class ChatController extends ChangeNotifier {
     String groupId,
     String body, {
     Map<String, dynamic>? reply,
-  }) => _sendGroupEncrypted(groupId, wrapTextEnvelope(body, reply));
+  }) {
+    final exp = expForTimer(
+      timerSecondsOf(_groups, _dmDisappearing, ConversationTarget.group(groupId)),
+      DateTime.now().millisecondsSinceEpoch,
+    );
+    return _sendGroupEncrypted(groupId, wrapTextEnvelope(body, reply, exp));
+  }
 
   /// Encrypts [plaintext] for every group member we share a key with and
   /// emits `group:message:send`.
@@ -693,6 +836,7 @@ class ChatController extends ChangeNotifier {
       mime: mime,
       name: name,
       duration: duration,
+      target: ConversationTarget.dm(toUsername),
       send: (envelope) => _sendEncrypted(toUsername, envelope),
     );
   }
@@ -711,6 +855,7 @@ class ChatController extends ChangeNotifier {
       mime: mime,
       name: name,
       duration: duration,
+      target: ConversationTarget.group(groupId),
       send: (envelope) => _sendGroupEncrypted(groupId, envelope),
     );
   }
@@ -720,6 +865,7 @@ class ChatController extends ChangeNotifier {
     required String mime,
     required String? name,
     required Future<bool> Function(String envelope) send,
+    required ConversationTarget target,
     num? duration,
   }) async {
     if (bytes.length > _maxMediaBytes) {
@@ -798,6 +944,11 @@ class ChatController extends ChangeNotifier {
       envelopeParts['d'] = duration.toDouble();
     }
     if (normalizedName != null) envelopeParts['name'] = normalizedName;
+    final exp = expForTimer(
+      timerSecondsOf(_groups, _dmDisappearing, target),
+      DateTime.now().millisecondsSinceEpoch,
+    );
+    if (exp != null) envelopeParts['exp'] = exp;
     return send(jsonEncode(envelopeParts));
   }
 
@@ -901,7 +1052,11 @@ class ChatController extends ChangeNotifier {
     String question,
     List<String> options,
   ) {
-    final envelope = wrapPollEnvelope(question, options);
+    final exp = expForTimer(
+      timerSecondsOf(_groups, _dmDisappearing, ConversationTarget.dm(toUsername)),
+      DateTime.now().millisecondsSinceEpoch,
+    );
+    final envelope = wrapPollEnvelope(question, options, exp);
     if (envelope == null) return Future<bool>.value(false);
     return _sendEncrypted(toUsername, envelope);
   }
@@ -912,7 +1067,11 @@ class ChatController extends ChangeNotifier {
     String question,
     List<String> options,
   ) {
-    final envelope = wrapPollEnvelope(question, options);
+    final exp = expForTimer(
+      timerSecondsOf(_groups, _dmDisappearing, ConversationTarget.group(groupId)),
+      DateTime.now().millisecondsSinceEpoch,
+    );
+    final envelope = wrapPollEnvelope(question, options, exp);
     if (envelope == null) return Future<bool>.value(false);
     return _sendGroupEncrypted(groupId, envelope);
   }
@@ -1031,6 +1190,50 @@ class ChatController extends ChangeNotifier {
     if (context == null || context.poll == null || context.deleted) return;
     if (payload.u != context.fromUsername) return;
     _setPollClosed(payload.pollId, true);
+  }
+
+  // ── Tier-3 handlers ───────────────────────────────────────────────────
+
+  void _handleGroupUpdated(GroupUpdatedPayload payload) {
+    final next = applyGroupUpdated(_groups, payload);
+    if (!identical(next, _groups)) _groups = next;
+    _notify();
+  }
+
+  void _handleMessagePinned(MessagePinnedPayload payload) {
+    final key = relayKeyFor(
+      u: payload.u,
+      to: payload.to,
+      groupId: payload.groupId,
+      myUsername: _me?.username,
+    );
+    if (key == null) return;
+    final targetState = pinTargetState(
+      key,
+      payload.targetId,
+      _allPrivateMessages(),
+      _allGroupMessages(),
+    );
+    final next = applyPin(
+      _pinned,
+      key,
+      payload.pinned ? payload.targetId : null,
+      targetState: targetState,
+    );
+    if (!identical(next, _pinned)) _pinned = next;
+    _notify();
+  }
+
+  void _handleDisappearingChanged(DisappearingChangedPayload payload) {
+    final key = relayKeyFor(
+      u: payload.u,
+      to: payload.to,
+      groupId: payload.groupId,
+      myUsername: _me?.username,
+    );
+    if (key == null) return;
+    _applyDisappearing(key, payload.seconds);
+    _notify();
   }
 
   // ── Typing (C1) ────────────────────────────────────────────────────────
@@ -1301,6 +1504,40 @@ class ChatController extends ChangeNotifier {
 
   // ── Edit / delete (C6) ────────────────────────────────────────────────
 
+  List<DecryptedMessage> _allPrivateMessages() {
+    final result = <DecryptedMessage>[];
+    for (final bucket in _privateByPeer.values) {
+      for (final entry in bucket) {
+        result.add(entry.value);
+      }
+    }
+    return result;
+  }
+
+  List<DecryptedGroupMessage> _allGroupMessages() {
+    final result = <DecryptedGroupMessage>[];
+    for (final bucket in _groupByGroup.values) {
+      for (final entry in bucket) {
+        result.add(entry.value);
+      }
+    }
+    return result;
+  }
+
+  void _applyDisappearing(String key, int seconds) {
+    if (key.startsWith('group:')) {
+      final groupId = key.substring('group:'.length);
+      final index = _groups.indexWhere((group) => group.groupId == groupId);
+      if (index == -1) return;
+      final current = _groups[index];
+      if (current.disappearing == seconds) return;
+      _groups[index] = current.copyWith(disappearing: seconds);
+      return;
+    }
+    if (_dmDisappearing[key] == seconds) return;
+    _dmDisappearing[key] = seconds;
+  }
+
   DecryptedMessage? _privateById(String id) {
     if (id.isEmpty) return null;
     for (final bucket in _privateByPeer.values) {
@@ -1533,6 +1770,11 @@ class ChatController extends ChangeNotifier {
       _ => false,
     };
     if (!owned) return;
+    if (original is DecryptedMessage || original is DecryptedGroupMessage) {
+      final key = conversationKeyOfMessage(original as dynamic);
+      final next = clearPinForMessage(_pinned, key, payload.targetId);
+      if (!identical(next, _pinned)) _pinned = next;
+    }
     _applyDeleted(payload.targetId, true);
   }
 
@@ -1733,6 +1975,9 @@ class ChatController extends ChangeNotifier {
       _socket.onProfileUpdated(_handleProfileUpdated),
       _socket.onPollVoted(_handlePollVoted),
       _socket.onPollClosed(_handlePollClosed),
+      _socket.onGroupUpdated(_handleGroupUpdated),
+      _socket.onMessagePinned(_handleMessagePinned),
+      _socket.onDisappearingChanged(_handleDisappearingChanged),
     ]);
   }
 
@@ -1965,7 +2210,6 @@ class ChatController extends ChangeNotifier {
   void _handlePrivateMessage(PrivateMessage message) {
     final me = _me;
     final isOwn = me != null && message.from == me.userId;
-    _noteIncomingPrivate(message, isOwn: isOwn);
     // Our own echoed message is encrypted with the recipient's shared key,
     // not with our self key.
     final decryptWith = isOwn ? message.toUsername : message.fromUsername;
@@ -1979,15 +2223,18 @@ class ChatController extends ChangeNotifier {
 
     if (!_e2ee.hasSharedKey(decryptWith)) {
       // Keep the ciphertext and decrypt once the key exchange completes.
-      _upsertPrivate(
-        pending,
-        _privateMessage(
-          wire: message,
-          isOwn: isOwn,
-          plaintext: '[Encrypted]',
-          decryptionFailed: true,
-        ),
+      final built = _privateMessage(
+        wire: message,
+        isOwn: isOwn,
+        plaintext: '[Encrypted]',
+        decryptionFailed: true,
       );
+      if (!purge.shouldStoreAtIngestion(built.expiresAt, DateTime.now().millisecondsSinceEpoch)) {
+        _pendingPrivate.remove(pending.key);
+        return;
+      }
+      _upsertPrivate(pending, built);
+      _noteIncomingPrivate(message, isOwn: isOwn);
       return;
     }
     unawaited(_resolvePrivate(pending));
@@ -2003,16 +2250,18 @@ class ChatController extends ChangeNotifier {
         pending.wire.iv,
       );
       if (_disposed) return;
-      _pendingPrivate.remove(pending.key);
-      _upsertPrivate(
-        pending,
-        _privateMessage(
-          wire: pending.wire,
-          isOwn: pending.isOwn,
-          plaintext: plaintext,
-          decryptionFailed: false,
-        ),
+      final built = _privateMessage(
+        wire: pending.wire,
+        isOwn: pending.isOwn,
+        plaintext: plaintext,
+        decryptionFailed: false,
       );
+      if (!purge.shouldStoreAtIngestion(built.expiresAt, DateTime.now().millisecondsSinceEpoch)) {
+        _pendingPrivate.remove(pending.key);
+        return;
+      }
+      _pendingPrivate.remove(pending.key);
+      _upsertPrivate(pending, built);
       // The decrypted body may reveal a mention the wire note couldn't see.
       _noteIncomingPrivate(
         pending.wire,
@@ -2024,16 +2273,18 @@ class ChatController extends ChangeNotifier {
       if (_disposed) return;
       // The shared key vanished mid-flight (peer rejoin); keep waiting.
       if (error is StateError) return;
-      _pendingPrivate.remove(pending.key);
-      _upsertPrivate(
-        pending,
-        _privateMessage(
-          wire: pending.wire,
-          isOwn: pending.isOwn,
-          plaintext: '[Decryption failed]',
-          decryptionFailed: true,
-        ),
+      final built = _privateMessage(
+        wire: pending.wire,
+        isOwn: pending.isOwn,
+        plaintext: '[Decryption failed]',
+        decryptionFailed: true,
       );
+      if (!purge.shouldStoreAtIngestion(built.expiresAt, DateTime.now().millisecondsSinceEpoch)) {
+        _pendingPrivate.remove(pending.key);
+        return;
+      }
+      _pendingPrivate.remove(pending.key);
+      _upsertPrivate(pending, built);
       _noteIncomingPrivate(pending.wire, decryptionFailed: true, isOwn: pending.isOwn);
     }
   }
@@ -2074,6 +2325,7 @@ class ChatController extends ChangeNotifier {
       decryptionFailed: decryptionFailed,
       media: unwrapped.media,
       poll: unwrapped.poll,
+      expiresAt: unwrapped.expiresAt,
     );
   }
 
@@ -2085,22 +2337,23 @@ class ChatController extends ChangeNotifier {
     Map<String, dynamic>? reply,
     MediaDescriptor? media,
     PollDefinition? poll,
+    int? expiresAt,
   })
   _unwrapPlaintext(String plaintext, bool decryptionFailed) {
     if (decryptionFailed) {
-      return (body: null, reply: null, media: null, poll: null);
+      return (body: null, reply: null, media: null, poll: null, expiresAt: null);
     }
     final parsed = parseEnvelope(plaintext);
     if (parsed.isMedia) {
-      return (body: null, reply: null, media: parsed.media, poll: null);
+      return (body: null, reply: null, media: parsed.media, poll: null, expiresAt: parsed.expiresAt);
     }
     if (parsed.isPoll) {
-      return (body: null, reply: parsed.reply, media: null, poll: parsed.poll);
+      return (body: null, reply: parsed.reply, media: null, poll: parsed.poll, expiresAt: parsed.expiresAt);
     }
     if (parsed.isText) {
-      return (body: parsed.text, reply: parsed.reply, media: null, poll: null);
+      return (body: parsed.text, reply: parsed.reply, media: null, poll: null, expiresAt: parsed.expiresAt);
     }
-    return (body: plaintext, reply: null, media: null, poll: null);
+    return (body: plaintext, reply: null, media: null, poll: null, expiresAt: parsed.expiresAt);
   }
 
   // ── Group message handling ─────────────────────────────────────────────
@@ -2119,21 +2372,19 @@ class ChatController extends ChangeNotifier {
 
     final key = message.dedupeKey;
     final isOwn = message.from == me.userId;
-    _noteIncomingGroup(message, isOwn: isOwn);
     if (myEntry == null) {
       // No ciphertext addressed to us; show a placeholder like the web
       // client (there is nothing to decrypt later).
-      _upsert(
-        _groupByGroup,
-        message.groupId,
-        key,
-        _groupMessage(
-          wire: message,
-          isOwn: isOwn,
-          plaintext: '[Encrypted]',
-          decryptionFailed: true,
-        ),
+      final built = _groupMessage(
+        wire: message,
+        isOwn: isOwn,
+        plaintext: '[Encrypted]',
+        decryptionFailed: true,
       );
+      if (purge.shouldStoreAtIngestion(built.expiresAt, DateTime.now().millisecondsSinceEpoch)) {
+        _upsert(_groupByGroup, message.groupId, key, built);
+        _noteIncomingGroup(message, isOwn: isOwn);
+      }
       return;
     }
 
@@ -2147,17 +2398,18 @@ class ChatController extends ChangeNotifier {
     _pendingGroup[pending.key] = pending;
 
     if (!_e2ee.hasSharedKey(pending.decryptWith)) {
-      _upsert(
-        _groupByGroup,
-        message.groupId,
-        pending.key,
-        _groupMessage(
-          wire: message,
-          isOwn: isOwn,
-          plaintext: '[Encrypted]',
-          decryptionFailed: true,
-        ),
+      final built = _groupMessage(
+        wire: message,
+        isOwn: isOwn,
+        plaintext: '[Encrypted]',
+        decryptionFailed: true,
       );
+      if (purge.shouldStoreAtIngestion(built.expiresAt, DateTime.now().millisecondsSinceEpoch)) {
+        _upsert(_groupByGroup, message.groupId, pending.key, built);
+        _noteIncomingGroup(message, isOwn: isOwn);
+      } else {
+        _pendingGroup.remove(pending.key);
+      }
       return;
     }
     unawaited(_resolveGroup(pending));
@@ -2173,18 +2425,18 @@ class ChatController extends ChangeNotifier {
         pending.myEntry.iv,
       );
       if (_disposed) return;
-      _pendingGroup.remove(pending.key);
-      _upsert(
-        _groupByGroup,
-        pending.wire.groupId,
-        pending.key,
-        _groupMessage(
-          wire: pending.wire,
-          isOwn: pending.isOwn,
-          plaintext: plaintext,
-          decryptionFailed: false,
-        ),
+      final built = _groupMessage(
+        wire: pending.wire,
+        isOwn: pending.isOwn,
+        plaintext: plaintext,
+        decryptionFailed: false,
       );
+      if (!purge.shouldStoreAtIngestion(built.expiresAt, DateTime.now().millisecondsSinceEpoch)) {
+        _pendingGroup.remove(pending.key);
+        return;
+      }
+      _pendingGroup.remove(pending.key);
+      _upsert(_groupByGroup, pending.wire.groupId, pending.key, built);
       // The decrypted body may reveal a mention the wire note couldn't see.
       _noteIncomingGroup(
         pending.wire,
@@ -2195,18 +2447,18 @@ class ChatController extends ChangeNotifier {
     } catch (error) {
       if (_disposed) return;
       if (error is StateError) return;
-      _pendingGroup.remove(pending.key);
-      _upsert(
-        _groupByGroup,
-        pending.wire.groupId,
-        pending.key,
-        _groupMessage(
-          wire: pending.wire,
-          isOwn: pending.isOwn,
-          plaintext: '[Decryption failed]',
-          decryptionFailed: true,
-        ),
+      final built = _groupMessage(
+        wire: pending.wire,
+        isOwn: pending.isOwn,
+        plaintext: '[Decryption failed]',
+        decryptionFailed: true,
       );
+      if (!purge.shouldStoreAtIngestion(built.expiresAt, DateTime.now().millisecondsSinceEpoch)) {
+        _pendingGroup.remove(pending.key);
+        return;
+      }
+      _pendingGroup.remove(pending.key);
+      _upsert(_groupByGroup, pending.wire.groupId, pending.key, built);
       _noteIncomingGroup(pending.wire, decryptionFailed: true, isOwn: pending.isOwn);
     }
   }
@@ -2233,6 +2485,7 @@ class ChatController extends ChangeNotifier {
       decryptionFailed: decryptionFailed,
       media: unwrapped.media,
       poll: unwrapped.poll,
+      expiresAt: unwrapped.expiresAt,
     );
   }
 
@@ -2298,6 +2551,8 @@ class ChatController extends ChangeNotifier {
     _disposed = true;
     _errorTimer?.cancel();
     _errorTimer = null;
+    _purgeTimer?.cancel();
+    _purgeTimer = null;
     _typingRepeatTimer?.cancel();
     _typingRepeatTimer = null;
     for (final timer in _typingHideTimers.values) {

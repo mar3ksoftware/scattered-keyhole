@@ -27,36 +27,49 @@ function parseReplyRef(value: unknown): ReplyRef | null {
 // Parse order matters (spec C3): JSON.parse first, then t === 'media',
 // then t === 'text', then t === 'poll'; a failed parse is legacy raw text;
 // any other t renders the raw string as-is.
+// `exp` (Tier-3 C) is read from the same record: a finite number > 0 rides
+// along as the expiry, anything else is dropped so the message still renders
+// and simply never expires (drop-never-reject, same as `d`).
+function parseExpiresAt(fields: Record<string, unknown>): number | null {
+  const raw = fields['exp'];
+  return typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : null;
+}
+
 export function parseEnvelope(plaintext: string): ParsedEnvelope {
   let parsed: unknown;
   try {
     parsed = JSON.parse(plaintext);
   } catch {
-    return { kind: 'raw', text: plaintext };
+    return { kind: 'raw', text: plaintext, expiresAt: null };
   }
-  if (!isRecord(parsed)) return { kind: 'raw', text: plaintext };
+  if (!isRecord(parsed)) return { kind: 'raw', text: plaintext, expiresAt: null };
+  const expiresAt = parseExpiresAt(parsed);
 
   if (parsed['t'] === 'media') {
     const descriptor = parseMediaEnvelope(plaintext);
     // A malformed descriptor falls back to raw so the bubble keeps showing
     // the plaintext instead of an empty attachment slot.
-    return descriptor !== null ? { kind: 'media', descriptor } : { kind: 'raw', text: plaintext };
+    return descriptor !== null
+      ? { kind: 'media', descriptor, expiresAt }
+      : { kind: 'raw', text: plaintext, expiresAt };
   }
 
   if (parsed['t'] === 'text') {
     const body = parsed['b'];
-    if (typeof body !== 'string') return { kind: 'raw', text: plaintext };
-    return { kind: 'text', body, reply: parseReplyRef(parsed['r']) };
+    if (typeof body !== 'string') return { kind: 'raw', text: plaintext, expiresAt };
+    return { kind: 'text', body, reply: parseReplyRef(parsed['r']), expiresAt };
   }
 
   if (parsed['t'] === 'poll') {
     const poll = parsePollFields(parsed);
     // A poll breaking the B1 rules renders as raw text, same fallback as a
     // malformed media descriptor.
-    return poll !== null ? { kind: 'poll', poll } : { kind: 'raw', text: plaintext };
+    return poll !== null
+      ? { kind: 'poll', poll, expiresAt }
+      : { kind: 'raw', text: plaintext, expiresAt };
   }
 
-  return { kind: 'raw', text: plaintext };
+  return { kind: 'raw', text: plaintext, expiresAt };
 }
 
 // B1 rules: q 1..200 chars (raw length), 2..10 options of 1..60 chars each,
@@ -77,24 +90,34 @@ function parsePollFields(fields: Record<string, unknown>): PollDefinition | null
   return { question, options: parsed };
 }
 
-// Every newly sent text message goes through here, reply or not.
-export function wrapTextEnvelope(body: string, reply?: ReplyRef | null): string {
-  if (reply != null) {
-    return JSON.stringify({ t: 'text', b: body, r: reply } satisfies {
-      t: 'text';
-      b: string;
-      r: ReplyRef;
-    });
-  }
-  return JSON.stringify({ t: 'text', b: body } satisfies { t: 'text'; b: string });
+// Every newly sent text message goes through here, reply or not. `exp` is
+// the conversation-timer expiry (epoch ms) stamped at wrap time; when the
+// timer is off the field is left out entirely.
+export function wrapTextEnvelope(body: string, reply?: ReplyRef | null, exp?: number): string {
+  const envelope: { t: 'text'; b: string; r?: ReplyRef; exp?: number } = { t: 'text', b: body };
+  if (reply != null) envelope.r = reply;
+  if (exp !== undefined) envelope.exp = exp;
+  return JSON.stringify(envelope);
 }
 
 // Outgoing poll envelope; returns null when the B1 rules would make the
 // receiver render it as raw text.
-export function wrapPollEnvelope(question: string, options: readonly string[]): string | null {
+export function wrapPollEnvelope(
+  question: string,
+  options: readonly string[],
+  exp?: number,
+): string | null {
   const poll = parsePollFields({ q: question, o: options });
   if (poll === null) return null;
-  return JSON.stringify({ t: 'poll', q: poll.question, o: poll.options } satisfies PollEnvelope);
+  const envelope: PollEnvelope = { t: 'poll', q: poll.question, o: poll.options };
+  if (exp !== undefined) return JSON.stringify({ ...envelope, exp });
+  return JSON.stringify(envelope);
+}
+
+// Sender side of the conversation timer (Tier-3 C): timer > 0 stamps every
+// outgoing envelope with `exp = now + seconds*1000`; timer 0 sends no field.
+export function expForTimer(seconds: number, nowMs: number): number | undefined {
+  return seconds > 0 ? nowMs + seconds * 1000 : undefined;
 }
 
 // Reply excerpt: first 140 chars of the original body; media targets use

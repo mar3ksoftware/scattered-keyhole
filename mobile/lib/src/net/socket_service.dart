@@ -97,6 +97,15 @@ abstract interface class SocketService {
   /// `poll:close` — close a poll we authored.
   void sendPollClose(PollClosePayload payload);
 
+  /// `group:update` — rename a group and/or set its description (admin only).
+  void sendGroupUpdate(GroupUpdatePayload payload);
+
+  /// `message:pin` — pin or unpin a message in the conversation's slot.
+  void sendPin(MessagePinPayload payload);
+
+  /// `disappearing:set` — set a conversation's disappearing-message timer.
+  void sendDisappearingSet(DisappearingSetPayload payload);
+
   // ── Inbound: server -> client ──────────────────────────────────────────
 
   /// `user:joined` — a user (possibly us) joined; broadcast to everyone.
@@ -185,6 +194,15 @@ abstract interface class SocketService {
 
   /// `poll:closed` — a poll was closed by its author.
   Unsubscribe onPollClosed(void Function(PollClosedPayload payload) handler);
+
+  /// `group:updated` — full group state after a metadata change (spec A).
+  Unsubscribe onGroupUpdated(void Function(GroupUpdatedPayload payload) handler);
+
+  /// `message:pinned` — a pin/unpin was relayed to conversation members.
+  Unsubscribe onMessagePinned(void Function(MessagePinnedPayload payload) handler);
+
+  /// `disappearing:changed` — a conversation's timer changed (spec C).
+  Unsubscribe onDisappearingChanged(void Function(DisappearingChangedPayload payload) handler);
 
   // ── Connection lifecycle listeners ─────────────────────────────────────
 
@@ -324,6 +342,21 @@ class IoSocketService implements SocketService {
   @override
   void sendPollClose(PollClosePayload payload) {
     _socket.emit(ChatEvents.pollClose, payload.toJson());
+  }
+
+  @override
+  void sendGroupUpdate(GroupUpdatePayload payload) {
+    _socket.emit(ChatEvents.groupUpdate, payload.toJson());
+  }
+
+  @override
+  void sendPin(MessagePinPayload payload) {
+    _socket.emit(ChatEvents.messagePin, payload.toJson());
+  }
+
+  @override
+  void sendDisappearingSet(DisappearingSetPayload payload) {
+    _socket.emit(ChatEvents.disappearingSet, payload.toJson());
   }
 
   // ── Inbound ────────────────────────────────────────────────────────────
@@ -530,6 +563,27 @@ class IoSocketService implements SocketService {
   Unsubscribe onPollClosed(void Function(PollClosedPayload payload) handler) {
     return _on(ChatEvents.pollClosed, (data) {
       handler(PollClosedPayload.fromJson(asJsonMap(data)));
+    });
+  }
+
+  @override
+  Unsubscribe onGroupUpdated(void Function(GroupUpdatedPayload payload) handler) {
+    return _on(ChatEvents.groupUpdated, (data) {
+      handler(GroupUpdatedPayload.fromJson(asJsonMap(data)));
+    });
+  }
+
+  @override
+  Unsubscribe onMessagePinned(void Function(MessagePinnedPayload payload) handler) {
+    return _on(ChatEvents.messagePinned, (data) {
+      handler(MessagePinnedPayload.fromJson(asJsonMap(data)));
+    });
+  }
+
+  @override
+  Unsubscribe onDisappearingChanged(void Function(DisappearingChangedPayload payload) handler) {
+    return _on(ChatEvents.disappearingChanged, (data) {
+      handler(DisappearingChangedPayload.fromJson(asJsonMap(data)));
     });
   }
 

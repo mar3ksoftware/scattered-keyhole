@@ -135,6 +135,7 @@ class DecryptedMessage {
     required this.decryptionFailed,
     this.media,
     this.poll,
+    this.expiresAt,
   });
 
   factory DecryptedMessage.fromJson(Map<String, dynamic> json) {
@@ -154,6 +155,7 @@ class DecryptedMessage {
       decryptionFailed: readBool(json['decryptionFailed']),
       media: MediaDescriptor.tryFromJson(json['media']),
       poll: PollDefinition.tryFromJson(json['poll']),
+      expiresAt: json['expiresAt'] is int ? json['expiresAt'] as int : null,
     );
   }
 
@@ -187,6 +189,10 @@ class DecryptedMessage {
   /// sees them (C5).
   final PollDefinition? poll;
 
+  /// Disappearance deadline in Unix epoch ms from the envelope's `exp`
+  /// (spec C); null when the timer is off or the value was malformed.
+  final int? expiresAt;
+
   /// The other participant in this conversation, regardless of direction.
   String get peerUsername => isOwn ? toUsername : fromUsername;
 
@@ -206,6 +212,7 @@ class DecryptedMessage {
     'decryptionFailed': decryptionFailed,
     if (media != null) 'media': media!.toJson(),
     if (poll != null) 'poll': poll!.toJson(),
+    if (expiresAt != null) 'expiresAt': expiresAt,
   };
 
   DecryptedMessage copyWith({
@@ -218,6 +225,7 @@ class DecryptedMessage {
     bool? decryptionFailed,
     MediaDescriptor? media,
     PollDefinition? poll,
+    int? expiresAt,
   }) {
     return DecryptedMessage(
       id: id ?? this.id,
@@ -235,6 +243,7 @@ class DecryptedMessage {
       decryptionFailed: decryptionFailed ?? this.decryptionFailed,
       media: media ?? this.media,
       poll: poll ?? this.poll,
+      expiresAt: expiresAt ?? this.expiresAt,
     );
   }
 }
@@ -332,6 +341,7 @@ class DecryptedGroupMessage {
     required this.decryptionFailed,
     this.media,
     this.poll,
+    this.expiresAt,
   });
 
   factory DecryptedGroupMessage.fromJson(Map<String, dynamic> json) {
@@ -350,6 +360,7 @@ class DecryptedGroupMessage {
       decryptionFailed: readBool(json['decryptionFailed']),
       media: MediaDescriptor.tryFromJson(json['media']),
       poll: PollDefinition.tryFromJson(json['poll']),
+      expiresAt: json['expiresAt'] is int ? json['expiresAt'] as int : null,
     );
   }
 
@@ -382,6 +393,10 @@ class DecryptedGroupMessage {
   /// sees them (C5).
   final PollDefinition? poll;
 
+  /// Disappearance deadline in Unix epoch ms from the envelope's `exp`
+  /// (spec C); null when the timer is off or the value was malformed.
+  final int? expiresAt;
+
   Map<String, dynamic> toJson() => <String, dynamic>{
     if (id.isNotEmpty) 'id': id,
     'groupId': groupId,
@@ -397,6 +412,7 @@ class DecryptedGroupMessage {
     'decryptionFailed': decryptionFailed,
     if (media != null) 'media': media!.toJson(),
     if (poll != null) 'poll': poll!.toJson(),
+    if (expiresAt != null) 'expiresAt': expiresAt,
   };
 
   DecryptedGroupMessage copyWith({
@@ -409,6 +425,7 @@ class DecryptedGroupMessage {
     bool? decryptionFailed,
     MediaDescriptor? media,
     PollDefinition? poll,
+    int? expiresAt,
   }) {
     return DecryptedGroupMessage(
       id: id ?? this.id,
@@ -425,6 +442,7 @@ class DecryptedGroupMessage {
       decryptionFailed: decryptionFailed ?? this.decryptionFailed,
       media: media ?? this.media,
       poll: poll ?? this.poll,
+      expiresAt: expiresAt ?? this.expiresAt,
     );
   }
 }

@@ -62,6 +62,15 @@ class FakeSocketService implements SocketService {
     }
   }
 
+  void fireGroupUpdated(GroupUpdatedPayload payload) =>
+      fire(ChatEvents.groupUpdated, payload);
+
+  void fireMessagePinned(MessagePinnedPayload payload) =>
+      fire(ChatEvents.messagePinned, payload);
+
+  void fireDisappearingChanged(DisappearingChangedPayload payload) =>
+      fire(ChatEvents.disappearingChanged, payload);
+
   Unsubscribe _register(String event, void Function(Object?) callback) {
     final list = _listeners.putIfAbsent(event, () => <void Function(Object?)>[]);
     list.add(callback);
@@ -156,6 +165,17 @@ class FakeSocketService implements SocketService {
   @override
   void sendPollClose(PollClosePayload payload) =>
       _record(ChatEvents.pollClose, payload);
+
+  @override
+  void sendGroupUpdate(GroupUpdatePayload payload) =>
+      _record(ChatEvents.groupUpdate, payload);
+
+  @override
+  void sendPin(MessagePinPayload payload) => _record(ChatEvents.messagePin, payload);
+
+  @override
+  void sendDisappearingSet(DisappearingSetPayload payload) =>
+      _record(ChatEvents.disappearingSet, payload);
 
   // ── Inbound ────────────────────────────────────────────────────────────
 
@@ -353,6 +373,27 @@ class FakeSocketService implements SocketService {
   Unsubscribe onPollClosed(void Function(PollClosedPayload payload) handler) {
     return _register(ChatEvents.pollClosed, (data) {
       handler(data! as PollClosedPayload);
+    });
+  }
+
+  @override
+  Unsubscribe onGroupUpdated(void Function(GroupUpdatedPayload payload) handler) {
+    return _register(ChatEvents.groupUpdated, (data) {
+      handler(data! as GroupUpdatedPayload);
+    });
+  }
+
+  @override
+  Unsubscribe onMessagePinned(void Function(MessagePinnedPayload payload) handler) {
+    return _register(ChatEvents.messagePinned, (data) {
+      handler(data! as MessagePinnedPayload);
+    });
+  }
+
+  @override
+  Unsubscribe onDisappearingChanged(void Function(DisappearingChangedPayload payload) handler) {
+    return _register(ChatEvents.disappearingChanged, (data) {
+      handler(data! as DisappearingChangedPayload);
     });
   }
 

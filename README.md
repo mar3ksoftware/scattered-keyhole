@@ -28,6 +28,9 @@ The repository ships three components: a Bun backend on port 3000, a React web a
 - **Reactions** — emoji reactions on messages with aggregated counts
 - **Replies and edits** — quote a message, or edit your own text with an `(edited)` marker
 - **Delete for everyone** — tombstone any message you sent
+- **Disappearing messages** — per-conversation timers (off, 24 hours, 7 days, 30 days) stamp an expiry on every message; expired messages are purged client-side every 10 seconds
+- **Pinned messages** — one pinned message per conversation, shown in a banner with an unpin action
+- **Group descriptions** — optional group description shown in the conversation header
 - **Unread badges and mentions** — per-conversation unread counts with `@username` highlights
 - **Polls** — ask a question with 2–10 options; members vote and watch live tallies with percentages, and the author can close the poll
 - **Voice messages** — record up to 5 minutes of audio in the composer; encrypted like any attachment and played back inline
@@ -288,6 +291,7 @@ Scattered Keyhole/
 | `src/account-store.ts` | SQLite persistence via `bun:sqlite`, bcrypt via `Bun.password` |
 | `src/user-directory.ts` | Union of registered accounts + guest usernames (offline group members) |
 | `src/group-store.ts` | In-memory groups and membership |
+| `src/dm-settings-store.ts` | Per-DM disappearing timer settings (join-heal replay) |
 | `src/kick-vote-store.ts` | One active vote-kick per group, 60s TTL |
 | `src/user-registry.ts` | In-memory active user tracking, 30s disconnect TTL |
 | `src/rate-limiter.ts` | Token bucket rate limiting (10 req/s per socket) |
@@ -331,6 +335,7 @@ Scattered Keyhole/
 | `lib/src/crypto/e2ee_session.dart` | Per-peer shared key management |
 | `lib/src/crypto/media_crypto.dart` | Per-file encryption (file key + IV, SHA-256) |
 | `lib/src/models/` | Wire models: user, group, message, media, poll, auth, errors |
+| `lib/src/utils/` | Pure decision helpers: envelope exp, pins, purge, timer, group metadata, conversation keys |
 | `lib/src/ui/` | Screens (auth, chat shell, conversation list) and widgets |
 
 ### Socket.io event contract
@@ -346,7 +351,10 @@ Full types live in `backend/src/types.ts`; the Flutter client mirrors the names 
 | `e2ee:public_key` | Send own ECDH public key to one peer |
 | `message:send` | Relay one encrypted direct message (`to`, `ciphertext`, `iv`) |
 | `group:create` | Create a group from a name plus member usernames (offline users allowed) |
+| `group:update` | Admin-only group metadata update (name + description) |
 | `group:member:add`, `group:member:remove` | Admin-only membership changes |
+| `message:pin` | Pin or unpin a single message in a conversation (admin-only in groups) |
+| `disappearing:set` | Set the disappearing-message timer for a conversation (admin-only in groups) |
 | `group:kick:vote` | Vote to kick a member (majority required, 60 s window) |
 | `group:message:send` | Group message: one ciphertext per member the sender holds a shared key for |
 | `typing:send` | Typing indicator state for a DM or group conversation |
@@ -369,6 +377,9 @@ Full types live in `backend/src/types.ts`; the Flutter client mirrors the names 
 | `private_message` | Ciphertext-only direct message |
 | `group:message` | Group message carrying the per-member ciphertexts |
 | `group:created`, `group:created_error`, `group:message_delivery_failed`, `group:member:removed`, `group:kick:tally` | Group lifecycle, membership changes, live vote tallies (`active` / `passed` / `expired`) |
+| `group:updated` | Full group state after a metadata edit (name, description, disappearing timer) |
+| `message:pinned` | Pin/unpin relayed to every member but the actor (single slot per conversation) |
+| `disappearing:changed` | Timer change relayed to peers; also replayed on join for DM timers |
 | `typing:changed` | Who is currently typing in a conversation (sent to everyone but the typer) |
 | `receipt:read` | The DM peer read messages up to a timestamp |
 | `message:reacted` | Reaction added or removed (emoji + usernames, sent to everyone but the actor) |
@@ -452,7 +463,7 @@ What the server never stores: message bodies (E2EE, relay only), session state b
 
 Known limitations, accepted by design:
 
-- **The server sees metadata.** Usernames, group membership, presence, and e2ee public keys are visible to the server because it is the relay. TLS protects them from network observers only — not from the server operator.
+- **The server sees metadata.** Usernames, group membership, presence, e2ee public keys, group names and descriptions, and disappearing-message timer settings are visible to the server because it is the relay. TLS protects them from network observers only — not from the server operator.
 - **No offline message storage.** Messages addressed to an offline user are not queued; the sender gets a delivery failure, exactly as before.
 - **Stale guest identity.** If a guest name is later registered as an account, group rows created while they were a guest keep the old guest userId and are not migrated. New lookups resolve to the account.
 - **No certificate automation.** TLS certificates must be renewed externally.
@@ -498,7 +509,7 @@ cd mobile
 RUN_LIVE_E2E=1 flutter test test/e2e_live_test.dart
 ```
 
-The suite drives real `ChatController` clients against the running backend and verifies bidirectional E2EE messages between two clients, group membership (an invitee added while offline, admin remove, a passed vote-kick, the user directory), a media attachment round trip (upload → descriptor over E2EE → download → byte-for-byte check), a poll lifecycle (create, vote, revote, close), and a voice media round trip with its duration descriptor. `SERVER_URL` overrides the target (`http://localhost:3000` by default).
+The suite drives real `ChatController` clients against the running backend and verifies bidirectional E2EE messages between two clients, group membership (an invitee added while offline, admin remove, a passed vote-kick, the user directory), a media attachment round trip (upload → descriptor over E2EE → download → byte-for-byte check), a poll lifecycle (create, vote, revote, close), a voice media round trip with its duration descriptor, and Tier-3 group metadata edits (admin + non-admin rejection), pin flow (admin + member rejection), and disappearing timers with `expiresAt ~= now + 86400000` for DMs and groups. `SERVER_URL` overrides the target (`http://localhost:3000` by default).
 
 ## Tech Stack
 
