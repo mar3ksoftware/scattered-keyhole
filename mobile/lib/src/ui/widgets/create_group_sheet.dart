@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../state/chat_controller.dart';
+import '../../utils/group_meta.dart';
 import '../theme/app_theme.dart';
 
 /// Bottom sheet for creating a group: name field plus a member checklist.
@@ -29,16 +30,21 @@ class _CreateGroupSheetState extends State<CreateGroupSheet> {
   static const int _maxNameLength = 50;
 
   final TextEditingController _nameController = TextEditingController();
+  final TextEditingController _descriptionController = TextEditingController();
   final Set<String> _selected = <String>{};
 
   @override
   void dispose() {
     _nameController.dispose();
+    _descriptionController.dispose();
     super.dispose();
   }
 
-  bool get _canCreate =>
-      _nameController.text.trim().isNotEmpty && _selected.isNotEmpty;
+  bool get _canCreate => canCreateGroup(
+        _nameController.text,
+        _descriptionController.text,
+      ) &&
+      _selected.isNotEmpty;
 
   void _toggleMember(String username) {
     setState(() {
@@ -127,6 +133,21 @@ class _CreateGroupSheetState extends State<CreateGroupSheet> {
                     ),
                     decoration: const InputDecoration(
                       hintText: 'Group name',
+                      counterText: '',
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _descriptionController,
+                    onChanged: (_) => setState(() {}),
+                    maxLength: maxGroupDescriptionLength,
+                    maxLines: 3,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      color: AppColors.textPrimary,
+                    ),
+                    decoration: const InputDecoration(
+                      hintText: 'Description',
                       counterText: '',
                     ),
                   ),

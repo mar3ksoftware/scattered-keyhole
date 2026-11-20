@@ -142,6 +142,10 @@ class MessageBubble extends StatelessWidget {
     this.target,
     this.onReply,
     this.onEdit,
+    this.onPin,
+    this.onUnpin,
+    this.canPin = false,
+    this.isPinnedMessage = false,
   });
 
   factory MessageBubble.fromView(
@@ -152,6 +156,10 @@ class MessageBubble extends StatelessWidget {
     List<BodySegment>? segments,
     void Function(MessageView view)? onReply,
     void Function(MessageView view)? onEdit,
+    void Function(MessageView view)? onPin,
+    void Function(MessageView view)? onUnpin,
+    bool canPin = false,
+    bool isPinnedMessage = false,
   }) {
     return MessageBubble(
       text: view.text,
@@ -174,6 +182,10 @@ class MessageBubble extends StatelessWidget {
       target: target,
       onReply: onReply,
       onEdit: onEdit,
+      onPin: onPin,
+      onUnpin: onUnpin,
+      canPin: canPin,
+      isPinnedMessage: isPinnedMessage,
     );
   }
 
@@ -215,6 +227,18 @@ class MessageBubble extends StatelessWidget {
   /// Edit action from the long-press menu (C6).
   final void Function(MessageView view)? onEdit;
 
+  /// Pin action from the long-press menu (spec B).
+  final void Function(MessageView view)? onPin;
+
+  /// Unpin action from the long-press menu (spec B).
+  final void Function(MessageView view)? onUnpin;
+
+  /// Whether the current user may pin in this conversation.
+  final bool canPin;
+
+  /// Whether this message is the currently pinned one.
+  final bool isPinnedMessage;
+
   String get _time {
     final date = DateTime.fromMillisecondsSinceEpoch(timestamp);
     final hour = date.hour.toString().padLeft(2, '0');
@@ -242,7 +266,11 @@ class MessageBubble extends StatelessWidget {
       onEdit != null;
   bool get _canDelete => !deleted && isOwn && _hasActions;
 
-  bool get _menuEnabled => _canReply || _canReact || _canEdit || _canDelete;
+  bool get _canPinMessage => !isPinnedMessage && canPin && onPin != null;
+  bool get _canUnpinMessage => isPinnedMessage && canPin && onUnpin != null;
+
+  bool get _menuEnabled =>
+      _canReply || _canReact || _canEdit || _canDelete || _canPinMessage || _canUnpinMessage;
 
   MessageView _view() {
     return MessageView(
@@ -555,6 +583,16 @@ class MessageBubble extends StatelessWidget {
                   ),
                   onTap: () => Navigator.pop(sheetContext, 'delete'),
                 ),
+              if (_canPinMessage)
+                ListTile(
+                  title: const Text('Pin message'),
+                  onTap: () => Navigator.pop(sheetContext, 'pin'),
+                ),
+              if (_canUnpinMessage)
+                ListTile(
+                  title: const Text('Unpin message'),
+                  onTap: () => Navigator.pop(sheetContext, 'unpin'),
+                ),
             ],
           ),
         );
@@ -569,6 +607,10 @@ class MessageBubble extends StatelessWidget {
         onEdit?.call(_view());
       case 'delete':
         if (context.mounted) await _confirmDelete(context);
+      case 'pin':
+        onPin?.call(_view());
+      case 'unpin':
+        onUnpin?.call(_view());
       default:
         break;
     }

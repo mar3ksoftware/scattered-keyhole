@@ -280,6 +280,116 @@ class ProfileUpdatedPayload {
   final String status;
 }
 
+/// Outbound `message:pin` payload — pins or unpins one message in the
+/// conversation's single pin slot (spec B).
+class MessagePinPayload {
+  const MessagePinPayload({
+    this.to,
+    this.groupId,
+    required this.targetId,
+    required this.pinned,
+  });
+
+  factory MessagePinPayload.fromJson(Map<String, dynamic> json) {
+    return MessagePinPayload(
+      to: json['to'] is String ? json['to'] as String : null,
+      groupId: json['groupId'] is String ? json['groupId'] as String : null,
+      targetId: readString(json['targetId']),
+      pinned: readBool(json['pinned']),
+    );
+  }
+
+  final String? to;
+  final String? groupId;
+  final String targetId;
+  final bool pinned;
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+    if (to != null) 'to': to,
+    if (groupId != null) 'groupId': groupId,
+    'targetId': targetId,
+    'pinned': pinned,
+  };
+}
+
+/// Inbound `message:pinned` relay.
+class MessagePinnedPayload {
+  const MessagePinnedPayload({
+    required this.targetId,
+    required this.pinned,
+    required this.u,
+    this.to,
+    this.groupId,
+  });
+
+  factory MessagePinnedPayload.fromJson(Map<String, dynamic> json) {
+    return MessagePinnedPayload(
+      targetId: readString(json['targetId']),
+      pinned: readBool(json['pinned']),
+      u: readString(json['u']),
+      to: json['to'] is String ? json['to'] as String : null,
+      groupId: json['groupId'] is String ? json['groupId'] as String : null,
+    );
+  }
+
+  final String targetId;
+  final bool pinned;
+
+  /// Username of the user who performed the pin.
+  final String u;
+  final String? to;
+  final String? groupId;
+}
+
+/// Outbound `disappearing:set` payload — sets the conversation's timer to
+/// [seconds] (0 turns it off).
+class DisappearingSetPayload {
+  const DisappearingSetPayload({this.to, this.groupId, required this.seconds});
+
+  factory DisappearingSetPayload.fromJson(Map<String, dynamic> json) {
+    return DisappearingSetPayload(
+      to: json['to'] is String ? json['to'] as String : null,
+      groupId: json['groupId'] is String ? json['groupId'] as String : null,
+      seconds: readInt(json['seconds']),
+    );
+  }
+
+  final String? to;
+  final String? groupId;
+  final int seconds;
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+    if (to != null) 'to': to,
+    if (groupId != null) 'groupId': groupId,
+    'seconds': seconds,
+  };
+}
+
+/// Inbound `disappearing:changed` relay.
+///
+/// Two shapes reach the client (spec C): the normal relay carries `u` and
+/// either `to` or `groupId`, while the join-heal carries only `{seconds, to}`
+/// so a reconnecting client learns its own DM's timer.
+class DisappearingChangedPayload {
+  const DisappearingChangedPayload({this.to, this.groupId, required this.seconds, this.u});
+
+  factory DisappearingChangedPayload.fromJson(Map<String, dynamic> json) {
+    return DisappearingChangedPayload(
+      to: json['to'] is String ? json['to'] as String : null,
+      groupId: json['groupId'] is String ? json['groupId'] as String : null,
+      seconds: readInt(json['seconds']),
+      u: json['u'] is String ? json['u'] as String : null,
+    );
+  }
+
+  final String? to;
+  final String? groupId;
+  final int seconds;
+
+  /// Acting user; absent on the join-heal shape.
+  final String? u;
+}
+
 /// The conversation a tier-1 operation targets: either a DM peer or a group.
 class ConversationTarget {
   const ConversationTarget.dm(this.username)

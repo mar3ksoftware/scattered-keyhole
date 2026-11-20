@@ -9,13 +9,17 @@ import '../../crypto/media_crypto.dart';
 import '../../models/models.dart';
 import '../../state/chat_controller.dart';
 import '../../state/voice_recorder.dart';
+import '../../utils/conversation_keys.dart';
 import '../../utils/envelope.dart';
 import '../theme/app_theme.dart';
 import '../widgets/connection_status.dart';
+import '../widgets/conversation_settings_sheet.dart';
+import '../widgets/edit_group_modal.dart';
 import '../widgets/group_members_sheet.dart';
 import '../widgets/message_bubble.dart';
 import '../widgets/message_composer.dart';
 import '../widgets/message_list.dart';
+import '../widgets/pin_banner.dart';
 
 /// The conversation detail: header, message history, typing line and composer.
 ///
@@ -308,23 +312,44 @@ class _ChatScreenState extends State<ChatScreen> {
       builder: (context, _) {
         final group = _findGroup();
         final peer = _peer;
+        final target = _target;
         final status =
             peer != null ? _controller.statusOf(peer) : '';
         final title =
             group?.name ??
             (peer != null ? _controller.displayNameOf(peer) : 'Direct');
+        final subtitle = group != null
+            ? (group.description.isNotEmpty ? group.description : 'Group')
+            : (status.isEmpty ? null : status);
         final typingLabel = _typingLabel();
+        final conversationKey =
+            target == null ? null : conversationKeyFor(target);
+        final canPin = target == null
+            ? false
+            : (target.isGroup
+                ? (group?.isAdmin(_controller.me?.username) ?? false)
+                : true);
+        final pinnedId = conversationKey == null
+            ? null
+            : _controller.pinnedMessageId(conversationKey);
+        final messages = _messages();
+        MessageView? pinnedView;
+        if (pinnedId != null) {
+          for (final message in messages) {
+            if (message.id == pinnedId) {
+              pinnedView = message;
+              break;
+            }
+          }
+        }
         final reply = _reply;
         final editing = _editing;
-        final target = _target;
         return SafeArea(
           child: Column(
             children: [
               _ChatHeader(
                 title: title,
-                subtitle: group != null
-                    ? 'Group'
-                    : (status.isEmpty ? null : status),
+                subtitle: subtitle,
                 status: _controller.connectionStatus,
                 showBack: widget.showBack,
                 showStatusLabel: !widget.showBack,
@@ -335,6 +360,37 @@ class _ChatScreenState extends State<ChatScreen> {
                         controller: _controller,
                         groupId: group.groupId,
                       ),
+                onSettings: target == null
+                    ? null
+                    : () async {
+                        final seconds = await showConversationSettingsSheet(
+                          context,
+                          timerSeconds: _controller.timerSecondsFor(target),
+                          disabled: target.isGroup
+                              ? !(group?.isAdmin(_controller.me?.username) ??
+                                  false)
+                              : false,
+                          canEditGroup: target.isGroup &&
+                              (group?.isAdmin(_controller.me?.username) ??
+                                  false),
+                          onEditGroup: target.isGroup && group != null
+                              ? () => showEditGroupModal(
+                                    context,
+                                    group: group,
+                                    onSave: (name, description) =>
+                                        _controller.updateGroup(
+                                      group.groupId,
+                                      name,
+                                      description,
+                                    ),
+                                  )
+                              : null,
+                        );
+                        if (seconds != null && context.mounted) {
+                          final k = conversationKeyFor(target);
+                          _controller.setDisappearing(k, seconds);
+                        }
+                      },
                 onLogout: () {
                   _controller.logout();
                   // On phones the chat sits on top of the list; drop it so
@@ -344,9 +400,23 @@ class _ChatScreenState extends State<ChatScreen> {
                   }
                 },
               ),
+              if (pinnedView != null)
+                PinBanner(
+                  excerpt: replyExcerptFor(
+                    pinnedView.body ?? pinnedView.text,
+                    mediaName: pinnedView.media?.name,
+                    poll: pinnedView.poll,
+                  ),
+                  canUnpin: canPin,
+                  onUnpin: () {
+                    if (conversationKey != null && pinnedId != null) {
+                      _controller.sendPin(conversationKey, pinnedId, false);
+                    }
+                  },
+                ),
               Expanded(
                 child: MessageList(
-                  messages: _messages(),
+                  messages: messages,
                   controller: _controller,
                   target: target,
                   showReadTicks: peer != null,
@@ -354,6 +424,18 @@ class _ChatScreenState extends State<ChatScreen> {
                       peer != null ? _controller.readUpToFor(peer) : 0,
                   onReply: _startReply,
                   onEdit: _startEdit,
+                  onPin: (view) {
+                    final id = view.id;
+                    if (id == null || conversationKey == null) return;
+                    _controller.sendPin(conversationKey, id, true);
+                  },
+                  onUnpin: (view) {
+                    final id = view.id;
+                    if (id == null || conversationKey == null) return;
+                    _controller.sendPin(conversationKey, id, false);
+                  },
+                  canPin: canPin,
+                  pinnedMessageId: pinnedId,
                 ),
               ),
               if (typingLabel != null)
@@ -413,6 +495,7 @@ class _ChatHeader extends StatelessWidget {
     required this.onLogout,
     this.subtitle,
     this.onMembers,
+    this.onSettings,
   });
 
   final String title;
@@ -422,6 +505,7 @@ class _ChatHeader extends StatelessWidget {
   final bool showStatusLabel;
   final VoidCallback onLogout;
   final VoidCallback? onMembers;
+  final VoidCallback? onSettings;
 
   @override
   Widget build(BuildContext context) {
@@ -482,6 +566,16 @@ class _ChatHeader extends StatelessWidget {
                 onPressed: onMembers,
                 icon: const Icon(
                   Icons.people_outline,
+                  size: 22,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+            if (onSettings != null)
+              IconButton(
+                tooltip: 'Conversation settings',
+                onPressed: onSettings,
+                icon: const Icon(
+                  Icons.tune,
                   size: 22,
                   color: AppColors.textSecondary,
                 ),

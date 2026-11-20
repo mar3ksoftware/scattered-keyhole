@@ -496,6 +496,143 @@ void main() {
     timeout: const Timeout(Duration(seconds: 60)),
     skip: !live,
   );
+
+  test(
+    'pins, group metadata, and disappearing timers through live backend',
+    () async {
+      final suffix = DateTime.now().millisecondsSinceEpoch % 100000;
+      final aName = 'alice_$suffix';
+      final bName = 'bob_$suffix';
+      final groupName = 'Team_$suffix';
+      final alice = ChatController.forServer(serverUrl: url);
+      final bob = ChatController.forServer(serverUrl: url);
+      addTearDown(alice.dispose);
+      addTearDown(bob.dispose);
+
+      alice.joinAsGuest(aName);
+      bob.joinAsGuest(bName);
+      await _waitFor(() => alice.me != null && bob.me != null, 'both joined');
+      await _waitFor(
+        () => alice.users.any((u) => u.username == bName) &&
+            bob.users.any((u) => u.username == aName),
+        'roster',
+      );
+
+      // Group creation.
+      alice.createGroup(groupName, <String>[bName]);
+      await _waitFor(
+        () => alice.groups.any((g) => g.name == groupName),
+        'alice group',
+      );
+      await _waitFor(
+        () => bob.groups.any((g) => g.name == groupName),
+        'bob group',
+      );
+      final group = alice.groups.firstWhere((g) => g.name == groupName);
+      final groupId = group.groupId;
+      // Bob is not an admin.
+      final bobGroup = bob.groups.firstWhere((g) => g.groupId == groupId);
+      expect(bobGroup.isAdmin(bName), isFalse);
+      expect(group.isAdmin(aName), isTrue);
+
+      // Group metadata update by admin applies to both.
+      alice.updateGroup(groupId, 'Renamed_$suffix', 'a description');
+      await _waitFor(
+        () => alice.groups.any((g) =>
+            g.groupId == groupId && g.name == 'Renamed_$suffix' &&
+            g.description == 'a description'),
+        'alice sees updated group',
+      );
+      await _waitFor(
+        () => bob.groups.any((g) =>
+            g.groupId == groupId && g.name == 'Renamed_$suffix' &&
+            g.description == 'a description'),
+        'bob sees updated group',
+      );
+
+      // Non-admin update is rejected.
+      bob.updateGroup(groupId, 'Hacked', '');
+      await _waitFor(
+        () => bob.error != null &&
+            bob.error!.contains('Only admins can update group info'),
+        'bob rejected for group update',
+      );
+
+      // Pin flow: alice sends a message, then pins it.
+      expect(
+        await alice.sendGroupMessage(groupId, 'pin me'),
+        isTrue,
+        reason: 'alice send failed: ${alice.error}',
+      );
+      await _waitFor(
+        () => bob.groupMessagesFor(groupId).isNotEmpty,
+        'bob received group message',
+      );
+      final msg = alice.groupMessagesFor(groupId).last;
+      final msgId = msg.id;
+      expect(msgId, isNotNull);
+      alice.sendPin('group:$groupId', msgId, true);
+      await _waitFor(
+        () => alice.pinnedMessageId('group:$groupId') == msgId &&
+            bob.pinnedMessageId('group:$groupId') == msgId,
+        'pin propagates',
+      );
+
+      // Member pin rejected.
+      // bob needs a message to attempt pinning; reuse alice's message id.
+      bob.sendPin('group:$groupId', msgId, true);
+      await _waitFor(
+        () => bob.error != null &&
+            bob.error!.contains('Only admins can pin messages'),
+        'bob rejected for pin',
+      );
+
+      // DM disappearing timer + expiresAt.
+      alice.setDisappearing('dm:$bName', 86400);
+      await _waitFor(
+        () => alice.timerSecondsFor(ConversationTarget.dm(bName)) == 86400,
+        'alice dm timer set',
+      );
+      // bob's client-side timer may not update via join-heal until reconnect;
+      // the send path uses alice's timer.
+      expect(
+        await alice.sendMessage(bName, 'vanishing dm'),
+        isTrue,
+        reason: 'alice dm send failed: ${alice.error}',
+      );
+      await _waitFor(
+        () => bob.messagesForPeer(aName).any((m) => m.body == 'vanishing dm'),
+        'bob received dm',
+      );
+      final dmMsg = bob.messagesForPeer(aName).lastWhere((m) => m.body == 'vanishing dm');
+      expect(dmMsg.expiresAt, isNotNull);
+      final now = DateTime.now().millisecondsSinceEpoch;
+      expect(dmMsg.expiresAt!, closeTo(now + 86400 * 1000, 10000));
+
+      // Group disappearing timer + expiresAt.
+      alice.setDisappearing('group:$groupId', 86400);
+      await _waitFor(
+        () => alice.timerSecondsFor(ConversationTarget.group(groupId)) == 86400,
+        'alice group timer set',
+      );
+      expect(
+        await alice.sendGroupMessage(groupId, 'vanishing group'),
+        isTrue,
+        reason: 'alice group send failed: ${alice.error}',
+      );
+      await _waitFor(
+        () => bob.groupMessagesFor(groupId).any((m) => m.body == 'vanishing group'),
+        'bob received group msg',
+      );
+      final gMsg = bob.groupMessagesFor(groupId).lastWhere((m) => m.body == 'vanishing group');
+      expect(gMsg.expiresAt, isNotNull);
+      final now2 = DateTime.now().millisecondsSinceEpoch;
+      expect(gMsg.expiresAt!, closeTo(now2 + 86400 * 1000, 10000));
+    },
+    timeout: const Timeout(Duration(seconds: 60)),
+    skip: !live,
+  );
+
 }
 
 Future<void> _waitFor(bool Function() cond, String what) async {
