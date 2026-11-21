@@ -275,11 +275,29 @@ class MessageBubble extends StatelessWidget {
       onEdit != null;
   bool get _canDelete => !deleted && isOwn && _hasActions;
 
+  bool get _canRedact {
+    if (deleted || !_hasActions) return false;
+    if (isOwn) return false;
+    final target = _target;
+    if (target == null || !target.isGroup) return false;
+    final controller = this.controller;
+    if (controller == null) return false;
+    GroupInfo? group;
+    for (final g in controller.groups) {
+      if (g.groupId == target.groupId) {
+        group = g;
+        break;
+      }
+    }
+    if (group == null) return false;
+    return group.isAdmin(controller.me?.username ?? '');
+  }
+
   bool get _canPinMessage => !isPinnedMessage && canPin && onPin != null;
   bool get _canUnpinMessage => isPinnedMessage && canPin && onUnpin != null;
 
   bool get _menuEnabled =>
-      _canReply || _canReact || _canEdit || _canDelete || _canPinMessage || _canUnpinMessage;
+      _canReply || _canReact || _canEdit || _canDelete || _canRedact || _canPinMessage || _canUnpinMessage;
 
   MessageView _view() {
     return MessageView(
@@ -592,6 +610,14 @@ class MessageBubble extends StatelessWidget {
                   ),
                   onTap: () => Navigator.pop(sheetContext, 'delete'),
                 ),
+              if (_canRedact)
+                ListTile(
+                  title: const Text(
+                    'Delete for everyone',
+                    style: TextStyle(color: AppColors.dangerSoft),
+                  ),
+                  onTap: () => Navigator.pop(sheetContext, 'redact'),
+                ),
               if (_canPinMessage)
                 ListTile(
                   title: const Text('Pin message'),
@@ -616,6 +642,10 @@ class MessageBubble extends StatelessWidget {
         onEdit?.call(_view());
       case 'delete':
         if (context.mounted) await _confirmDelete(context);
+      case 'redact':
+        final target = _target;
+        final id = _view().id;
+        if (target != null && id != null) controller?.redactMessage(target, id);
       case 'pin':
         onPin?.call(_view());
       case 'unpin':

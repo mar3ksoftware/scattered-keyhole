@@ -84,6 +84,7 @@ class _GroupMembersSheetState extends State<GroupMembersSheet> {
             final isAdmin = group.members.any(
               (member) => member.userId == me?.userId && member.isAdmin,
             );
+            final isOwner = group.createdBy == me?.userId;
             final tally = controller.kickTallyFor(group.groupId);
             final voteActive = tally != null && tally.status == 'active';
             final query = _searchController.text.trim().toLowerCase();
@@ -158,6 +159,24 @@ class _GroupMembersSheetState extends State<GroupMembersSheet> {
                           controller.removeMember(group.groupId, member.username),
                       onVote: () =>
                           controller.kickVote(group.groupId, member.username),
+                      promoteLabel: isAdmin &&
+                              member.userId != group.createdBy &&
+                              member.username != me?.username
+                          ? (member.isAdmin
+                              ? (isOwner ? 'Demote' : null)
+                              : 'Promote')
+                          : null,
+                      onPromoteDemote: isAdmin &&
+                              member.userId != group.createdBy &&
+                              member.username != me?.username
+                          ? () {
+                              if (member.isAdmin) {
+                                controller.demoteMember(group.groupId, member.username);
+                              } else {
+                                controller.promoteMember(group.groupId, member.username);
+                              }
+                            }
+                          : null,
                     ),
                   if (isAdmin) ...[
                     const SizedBox(height: 16),
@@ -297,6 +316,8 @@ class _MemberRow extends StatelessWidget {
     required this.showVote,
     required this.onRemove,
     required this.onVote,
+    this.promoteLabel,
+    this.onPromoteDemote,
   });
 
   final GroupMember member;
@@ -305,6 +326,8 @@ class _MemberRow extends StatelessWidget {
   final bool showVote;
   final VoidCallback onRemove;
   final VoidCallback onVote;
+  final String? promoteLabel;
+  final VoidCallback? onPromoteDemote;
 
   @override
   Widget build(BuildContext context) {
@@ -379,6 +402,11 @@ class _MemberRow extends StatelessWidget {
                   color: AppColors.accentSoft,
                 ),
               ),
+            ),
+          if (promoteLabel != null && onPromoteDemote != null)
+            TextButton(
+              onPressed: onPromoteDemote,
+              child: Text(promoteLabel!),
             ),
           if (showRemove)
             IconButton(
