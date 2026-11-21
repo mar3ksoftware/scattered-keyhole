@@ -37,6 +37,27 @@ export async function exportPublicKey(key: CryptoKey): Promise<string> {
   return arrayBufferToBase64(raw);
 }
 
+// ── Durable identity keys (Tier-6) ────────────────────────────────────
+// Export/import the whole keypair as JWK so it can be persisted (IndexedDB)
+// and reloaded across sessions instead of being regenerated every page load.
+
+export type ExportedKeyPair = {
+  readonly publicKey: JsonWebKey;
+  readonly privateKey: JsonWebKey;
+};
+
+export async function exportKeyPairJwk(keyPair: CryptoKeyPair): Promise<ExportedKeyPair> {
+  const publicKey = await crypto.subtle.exportKey('jwk', keyPair.publicKey);
+  const privateKey = await crypto.subtle.exportKey('jwk', keyPair.privateKey);
+  return { publicKey, privateKey };
+}
+
+export async function importKeyPairJwk(exported: ExportedKeyPair): Promise<CryptoKeyPair> {
+  const publicKey = await crypto.subtle.importKey('jwk', exported.publicKey, { name: 'ECDH', namedCurve: 'P-256' }, true, []);
+  const privateKey = await crypto.subtle.importKey('jwk', exported.privateKey, { name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
+  return { publicKey, privateKey };
+}
+
 export async function importPublicKey(base64key: string): Promise<CryptoKey> {
   const raw = base64ToArrayBuffer(base64key);
   return crypto.subtle.importKey('raw', raw, { name: 'ECDH', namedCurve: 'P-256' }, true, []);
