@@ -204,6 +204,9 @@ abstract interface class SocketService {
   /// `disappearing:changed` — a conversation's timer changed (spec C).
   Unsubscribe onDisappearingChanged(void Function(DisappearingChangedPayload payload) handler);
 
+  /// `notice` — direct notice to the affected user (Tier-4).
+  Unsubscribe onNotice(void Function(NoticePayload payload) handler);
+
   // ── Connection lifecycle listeners ─────────────────────────────────────
 
   /// Socket.IO `connect` — also fires on every successful reconnect.
@@ -584,6 +587,13 @@ class IoSocketService implements SocketService {
   Unsubscribe onDisappearingChanged(void Function(DisappearingChangedPayload payload) handler) {
     return _on(ChatEvents.disappearingChanged, (data) {
       handler(DisappearingChangedPayload.fromJson(asJsonMap(data)));
+    });
+  }
+
+  @override
+  Unsubscribe onNotice(void Function(NoticePayload payload) handler) {
+    return _on(ChatEvents.notice, (data) {
+      handler(NoticePayload.fromJson(asJsonMap(data)));
     });
   }
 

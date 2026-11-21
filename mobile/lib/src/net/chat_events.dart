@@ -58,6 +58,7 @@ abstract final class ChatEvents {
   static const groupUpdated = 'group:updated';
   static const messagePinned = 'message:pinned';
   static const disappearingChanged = 'disappearing:changed';
+  static const notice = 'notice';
 
   // Socket.io lifecycle.
   static const connect = 'connect';

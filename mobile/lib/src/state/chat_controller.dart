@@ -1236,6 +1236,11 @@ class ChatController extends ChangeNotifier {
     _notify();
   }
 
+  void _handleNotice(NoticePayload payload) {
+    if (payload.message.isEmpty) return;
+    _showError(payload.message);
+  }
+
   // ── Typing (C1) ────────────────────────────────────────────────────────
 
   /// Starts (or keeps alive) the outgoing typing burst for [target]. While
@@ -1978,6 +1983,7 @@ class ChatController extends ChangeNotifier {
       _socket.onGroupUpdated(_handleGroupUpdated),
       _socket.onMessagePinned(_handleMessagePinned),
       _socket.onDisappearingChanged(_handleDisappearingChanged),
+      _socket.onNotice(_handleNotice),
     ]);
   }
 

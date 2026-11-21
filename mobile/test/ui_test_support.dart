@@ -64,6 +64,9 @@ class FakeSocketService implements SocketService {
   void fireDisappearingChanged(DisappearingChangedPayload payload) =>
       fire(ChatEvents.disappearingChanged, payload);
 
+  void fireNotice(NoticePayload payload) =>
+      fire(ChatEvents.notice, payload);
+
   Unsubscribe _register(String event, void Function(Object?) callback) {
     final list = _listeners.putIfAbsent(event, () => <void Function(Object?)>[]);
     list.add(callback);
@@ -390,6 +393,13 @@ class FakeSocketService implements SocketService {
   Unsubscribe onDisappearingChanged(void Function(DisappearingChangedPayload payload) handler) {
     return _register(ChatEvents.disappearingChanged, (data) {
       handler(data! as DisappearingChangedPayload);
+    });
+  }
+
+  @override
+  Unsubscribe onNotice(void Function(NoticePayload payload) handler) {
+    return _register(ChatEvents.notice, (data) {
+      handler(data! as NoticePayload);
     });
   }
 
