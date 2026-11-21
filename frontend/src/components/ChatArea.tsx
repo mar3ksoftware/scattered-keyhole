@@ -42,10 +42,12 @@ export function ChatArea({ selectedUser, selectedGroup, onBack, showBack }: Chat
     sendPin,
     setDisappearing,
     updateGroup,
+    getSafetyNumber,
   } = useChat();
   const [showMembers, setShowMembers] = useState(false);
   const [editingGroup, setEditingGroup] = useState(false);
   const [reply, setReply] = useState<ReplyRef | null>(null);
+  const [safetyNumber, setSafetyNumber] = useState<string | null>(null);
 
   useEffect(() => {
     // The drawer hides itself whenever no group is selected, so only a switch
@@ -212,6 +214,23 @@ export function ChatArea({ selectedUser, selectedGroup, onBack, showBack }: Chat
           selectedGroupInfo !== undefined && canAdmin ? () => setEditingGroup(true) : undefined
         }
       />
+      {selectedUser !== null && (
+        <div className="px-4 py-1">
+          <button
+            type="button"
+            onClick={async () => {
+              const sn = await getSafetyNumber(selectedUser);
+              setSafetyNumber(sn);
+            }}
+            className="text-xs text-zinc-500 hover:text-zinc-300"
+          >
+            Verify safety number
+          </button>
+          {safetyNumber !== null && (
+            <p className="mt-1 text-[10px] font-mono text-zinc-400 break-all">{safetyNumber}</p>
+          )}
+        </div>
+      )}
       {displayName == null ? (
         <div className="flex-1 flex items-center justify-center">
           <p className="text-zinc-500 text-sm">Select a conversation</p>

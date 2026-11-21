@@ -712,6 +712,7 @@ export type ChatContextValue = {
   // DM conversation key → timer seconds; group timers live on GroupInfo.
   readonly dmDisappearing: Readonly<Record<string, number>>;
   readonly sendPin: (target: ConversationTarget, targetId: string, pinned: boolean) => void;
+  readonly getSafetyNumber: (peerUsername: string) => Promise<string | null>;
   readonly setDisappearing: (target: ConversationTarget, seconds: number) => void;
   readonly updateGroup: (groupId: string, name: string, description: string) => void;
   // Public expiry seam (spec C): called by the 10 s sweeper and by tests.
@@ -1260,6 +1261,10 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
     },
     [enqueueOp],
   );
+
+  const getSafetyNumber = useCallback(async (peerUsername: string): Promise<string | null> => {
+    return e2eeRef.current.getSafetyNumber(peerUsername);
+  }, []);
 
   // Timer change (spec C): preset-guarded, optimistic, rollback on rejection.
   const setDisappearing = useCallback(
@@ -2001,6 +2006,7 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
     pins: state.pins,
     dmDisappearing: state.dmDisappearing,
     sendPin,
+    getSafetyNumber,
     setDisappearing,
     updateGroup,
     purgeExpired: purgeExpiredNow,
