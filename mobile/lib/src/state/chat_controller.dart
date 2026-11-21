@@ -394,6 +394,9 @@ class ChatController extends ChangeNotifier {
   int timerSecondsFor(ConversationTarget target) =>
       timerSecondsOf(_groups, _dmDisappearing, target);
 
+  Future<String?> safetyNumberFor(String peerUsername) =>
+      _e2ee.getSafetyNumber(peerUsername);
+
   /// Usernames currently typing in the DM [peer] or group [groupId], in
   /// roster order; our own name is never included (C1).
   List<String> typingUsernamesIn({String? peer, String? groupId}) {

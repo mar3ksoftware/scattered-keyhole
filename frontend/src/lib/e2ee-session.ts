@@ -15,11 +15,13 @@ export class E2eeSession {
   #keyPair: CryptoKeyPair | undefined;
   #keyPairPromise: Promise<CryptoKeyPair> | undefined;
   #sharedKeys: Map<string, CryptoKey>;
+  #peerPublicKeys: Map<string, string>;
 
   constructor() {
     this.#keyPair = undefined;
     this.#keyPairPromise = undefined;
     this.#sharedKeys = new Map();
+    this.#peerPublicKeys = new Map();
   }
 
   // Serialize keypair generation: multiple public-key exchanges can start
@@ -57,6 +59,7 @@ export class E2eeSession {
     const peerKey = await importPublicKey(peerPublicKeyBase64);
     const sharedKey = await deriveSharedKey(keyPair.privateKey, peerKey);
     this.#sharedKeys.set(peerUsername, sharedKey);
+    this.#peerPublicKeys.set(peerUsername, peerPublicKeyBase64);
     return sharedKey;
   }
 
@@ -83,11 +86,32 @@ export class E2eeSession {
     return this.#sharedKeys.has(peerUsername);
   }
 
+  // Safety number (Tier-6): a fingerprint of the two identity public keys so
+  // users can verify the E2EE session out of band. Returns null until both
+  // keys have been exchanged.
+  async getSafetyNumber(peerUsername: string): Promise<string | null> {
+    const peerKey = this.#peerPublicKeys.get(peerUsername);
+    if (peerKey === undefined) return null;
+    const ownKey = await this.getPublicKey();
+    const combined = new TextEncoder().encode(ownKey + ':' + peerKey);
+    const hash = await crypto.subtle.digest('SHA-256', combined);
+    const hex = Array.from(new Uint8Array(hash))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('')
+      .toUpperCase();
+    return hex.match(/.{1,4}/g)?.join(' ') ?? hex;
+  }
+
+  getPeerPublicKey(peerUsername: string): string | undefined {
+    return this.#peerPublicKeys.get(peerUsername);
+  }
+
   // A peer who rejoins may have generated a new keypair (page reload, logout).
   // Drop the old shared key so sends wait for the fresh key exchange instead
   // of encrypting with a key the peer can no longer decrypt.
   forgetSharedKey(peerUsername: string): void {
     this.#sharedKeys.delete(peerUsername);
+    this.#peerPublicKeys.delete(peerUsername);
   }
 
   // Public keys arrive asynchronously after a peer joins/reconnects. Wait a

@@ -47,6 +47,9 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Message the composer will reply to (C4); cleared on send/switch.
   MessageView? _reply;
 
+  /// Safety number (Tier-6) shown for the open DM, or null.
+  String? _safetyNumber;
+
   /// Message being edited inline (C6); the composer prefills from its body.
   MessageView? _editing;
 
@@ -86,6 +89,7 @@ class _ChatScreenState extends State<ChatScreen> {
       // Conversation switched: pending reply/edit and the typing burst end (C1).
       _reply = null;
       _editing = null;
+      _safetyNumber = null;
       _controller.stopTyping();
     }
   }
@@ -413,6 +417,32 @@ class _ChatScreenState extends State<ChatScreen> {
                       _controller.sendPin(conversationKey, pinnedId, false);
                     }
                   },
+                ),
+              if (peer != null)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                  child: TextButton(
+                    onPressed: () async {
+                      final sn = await _controller.safetyNumberFor(peer);
+                      if (!mounted || sn == null) return;
+                      setState(() => _safetyNumber = sn);
+                    },
+                    child: const Text('Verify safety number'),
+                  ),
+                ),
+              if (peer != null && _safetyNumber != null)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                  child: AlertDialog(
+                    title: const Text('Safety number'),
+                    content: Text(_safetyNumber!),
+                    actions: [
+                      TextButton(
+                        onPressed: () => setState(() => _safetyNumber = null),
+                        child: const Text('OK'),
+                      ),
+                    ],
+                  ),
                 ),
               Expanded(
                 child: MessageList(
