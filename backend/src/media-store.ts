@@ -1,3 +1,5 @@
+import { mkdirSync, readdirSync, unlinkSync, writeFileSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { CONSTANTS } from './types';
 
 type MediaEntry = { readonly bytes: Uint8Array; readonly createdAt: number };
@@ -9,6 +11,8 @@ type MediaStoreOptions = {
   readonly maxFiles?: number;
   readonly sweepIntervalMs?: number;
   readonly now?: () => number;
+  readonly diskDir?: string;
+  readonly wipeOnStartup?: boolean;
 };
 
 export class MediaStore {
@@ -18,6 +22,7 @@ export class MediaStore {
   readonly #maxTotalBytes: number;
   readonly #maxFiles: number;
   readonly #now: () => number;
+  readonly #diskDir: string | undefined;
   #totalBytes = 0;
   #fileCount = 0;
   #sweepTimer: ReturnType<typeof setInterval> | undefined;
@@ -28,6 +33,18 @@ export class MediaStore {
     this.#maxTotalBytes = opts?.maxTotalBytes ?? CONSTANTS.MAX_MEDIA_TOTAL_BYTES;
     this.#maxFiles = opts?.maxFiles ?? CONSTANTS.MAX_MEDIA_FILES;
     this.#now = opts?.now ?? Date.now;
+    this.#diskDir = opts?.diskDir;
+
+    if (this.#diskDir !== undefined) {
+      mkdirSync(this.#diskDir, { recursive: true });
+      if (opts?.wipeOnStartup === true) {
+        try {
+          for (const name of readdirSync(this.#diskDir)) {
+            try { unlinkSync(join(this.#diskDir, name)); } catch { /* ignore */ }
+          }
+        } catch { /* ignore */ }
+      }
+    }
 
     const sweepIntervalMs = opts?.sweepIntervalMs ?? CONSTANTS.MEDIA_SWEEP_INTERVAL_MS;
     if (sweepIntervalMs > 0) {
@@ -35,16 +52,28 @@ export class MediaStore {
     }
   }
 
+  #path(id: string): string | undefined {
+    if (this.#diskDir === undefined) return undefined;
+    const safe = id.replace(/[^a-zA-Z0-9._-]/g, '_');
+    return join(this.#diskDir, safe);
+  }
+
   // An expired entry counts as absent; drop it and fix the running totals.
   #takeLive(id: string, now: number): MediaEntry | undefined {
     const entry = this.#entries.get(id);
     if (entry === undefined) {
+      // Try disk if available.
+      const p = this.#path(id);
+      if (p === undefined) return undefined;
+      // No metadata in memory for this id (e.g. after restart) — treat as absent.
       return undefined;
     }
     if (now - entry.createdAt >= this.#ttlMs) {
       this.#entries.delete(id);
       this.#totalBytes -= entry.bytes.length;
       this.#fileCount -= 1;
+      const p = this.#path(id);
+      if (p !== undefined) { try { unlinkSync(p); } catch { /* ignore */ } }
       return undefined;
     }
     return entry;
@@ -60,11 +89,15 @@ export class MediaStore {
     const replacedBytes = existing?.bytes.length ?? 0;
     const replacedCount = existing === undefined ? 0 : 1;
 
-    // Prospective totals first, so a rejected replacement mutates nothing.
     const nextTotal = this.#totalBytes - replacedBytes + bytes.length;
     const nextCount = this.#fileCount - replacedCount + 1;
     if (nextTotal > this.#maxTotalBytes || nextCount > this.#maxFiles) {
       return 'quota_exceeded';
+    }
+
+    const p = this.#path(id);
+    if (p !== undefined) {
+      try { writeFileSync(p, bytes); } catch { return 'quota_exceeded'; }
     }
 
     this.#entries.set(id, { bytes, createdAt: now });
@@ -74,7 +107,13 @@ export class MediaStore {
   }
 
   get(id: string): Uint8Array | undefined {
-    return this.#takeLive(id, this.#now())?.bytes;
+    const entry = this.#takeLive(id, this.#now());
+    if (entry === undefined) {
+      const p = this.#path(id);
+      if (p === undefined) return undefined;
+      try { return new Uint8Array(readFileSync(p)); } catch { return undefined; }
+    }
+    return entry.bytes;
   }
 
   sweep(): number {
@@ -85,6 +124,8 @@ export class MediaStore {
         this.#entries.delete(id);
         this.#totalBytes -= entry.bytes.length;
         this.#fileCount -= 1;
+        const p = this.#path(id);
+        if (p !== undefined) { try { unlinkSync(p); } catch { /* ignore */ } }
         removed += 1;
       }
     }
