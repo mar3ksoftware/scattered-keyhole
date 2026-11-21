@@ -4,6 +4,10 @@
 // plus a per-peer AES-GCM shared key cache.
 
 import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:pointycastle/digests/sha256.dart';
 
 import 'e2ee.dart';
 import 'e2ee.dart'
@@ -21,6 +25,7 @@ class E2eeSession {
   E2eeKeyPair? _keyPair;
   Future<E2eeKeyPair>? _keyPairFuture;
   final Map<String, SharedKey> _sharedKeys = <String, SharedKey>{};
+  final Map<String, String> _peerPublicKeys = <String, String>{};
 
   /// Returns the P-256 keypair, generating it once and serializing concurrent
   /// callers so every key exchange uses the same identity.
@@ -70,6 +75,7 @@ class E2eeSession {
     final peerKey = await crypto.importPublicKey(peerPublicKeyBase64);
     final sharedKey = await crypto.deriveSharedKey(keyPair, peerKey);
     _sharedKeys[peerUsername] = sharedKey;
+    _peerPublicKeys[peerUsername] = peerPublicKeyBase64;
     return sharedKey;
   }
 
@@ -103,6 +109,21 @@ class E2eeSession {
   bool hasSharedKey(String peerUsername) =>
       _sharedKeys.containsKey(peerUsername);
 
+  /// Safety number (Tier-6): fingerprint of the two identity public keys.
+  Future<String?> getSafetyNumber(String peerUsername) async {
+    final peerKey = _peerPublicKeys[peerUsername];
+    if (peerKey == null) return null;
+    final ownKey = await getPublicKey();
+    final combined = utf8.encode('$ownKey:$peerKey');
+    final digest = SHA256Digest().process(Uint8List.fromList(combined));
+    final hex = digest.map((b) => b.toRadixString(16).padLeft(2, '0')).join().toUpperCase();
+    final groups = <String>[];
+    for (var i = 0; i < hex.length; i += 4) {
+      groups.add(hex.substring(i, i + 4 > hex.length ? hex.length : i + 4));
+    }
+    return groups.join(' ');
+  }
+
   /// Drops the cached key for [peerUsername].
   ///
   /// A peer who rejoins may have generated a new keypair (page reload, logout).
@@ -110,6 +131,7 @@ class E2eeSession {
   /// encrypting with a key the peer can no longer decrypt.
   void forgetSharedKey(String peerUsername) {
     _sharedKeys.remove(peerUsername);
+    _peerPublicKeys.remove(peerUsername);
   }
 
   /// Waits up to [timeoutMs] for a shared key to arrive, polling every
