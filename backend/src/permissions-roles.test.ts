@@ -14,8 +14,8 @@ import { MediaAuth } from './media-auth';
 import { ProfileStore } from './profile-store';
 import { RateLimiterRegistry } from './rate-limiter';
 import { createServer } from './server';
-import type { ErrorPayload, GroupUpdatedPayload, MessageDeletedPayload, MessageRejectedPayload, NoticePayload, UserInfo } from './types';
-import { CONSTANTS, EVENTS, UserId } from './types';
+import type { ErrorPayload, GroupUpdatedPayload, MessageDeletedPayload, MessageRejectedPayload, NoticePayload } from './types';
+import { EVENTS } from './types';
 import { UserDirectory } from './user-directory';
 import { UserRegistry } from './user-registry';
 
@@ -106,8 +106,7 @@ describe('Tier-4 permissions & roles', () => {
     const forB = waitEvent<GroupUpdatedPayload>(b, EVENTS.SERVER.GROUP_UPDATED);
     const notice = waitEvent<NoticePayload>(b, EVENTS.SERVER.NOTICE);
     a.emit(EVENTS.CLIENT.GROUP_MEMBER_PROMOTE, { groupId: group.groupId, username: 'pr2_b' });
-    const upd = await forB;
-    const member = upd.members?.find?.((m: any) => m.username === 'pr2_b') ?? (upd as any).members?.find((m: any) => m.username === 'pr2_b');
+    await forB;
     // group:updated may not carry members in this build; check notice instead
     const n = await notice;
     expect(n.message).toBe('You are now an admin of Pr2 group');
