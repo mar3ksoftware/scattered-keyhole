@@ -6,8 +6,10 @@ import {
   deriveSharedKey,
   decrypt as e2eeDecrypt,
   encrypt as e2eeEncrypt,
+  exportKeyPairJwk,
   exportPublicKey,
   generateKeyPair,
+  importKeyPairJwk,
   importPublicKey,
 } from './e2ee';
 
@@ -26,10 +28,73 @@ export class E2eeSession {
 
   // Serialize keypair generation: multiple public-key exchanges can start
   // concurrently, and they must all use the same keypair.
+  async #loadPersistedKeyPair(): Promise<CryptoKeyPair | undefined> {
+    if (typeof indexedDB === 'undefined') return undefined;
+    try {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const req = indexedDB.open('scattered-keyhole-e2ee', 1);
+        req.onupgradeneeded = () => {
+          const d = req.result;
+          if (!d.objectStoreNames.contains('identity')) d.createObjectStore('identity');
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      const tx = db.transaction('identity', 'readonly');
+      const store = tx.objectStore('identity');
+      const record = await new Promise<any>((resolve, reject) => {
+        const r = store.get('keypair');
+        r.onsuccess = () => resolve(r.result);
+        r.onerror = () => reject(r.error);
+      });
+      db.close();
+      if (record === undefined) return undefined;
+      return importKeyPairJwk(record as any);
+    } catch {
+      return undefined;
+    }
+  }
+
+  async #persistKeyPair(keyPair: CryptoKeyPair): Promise<void> {
+    if (typeof indexedDB === 'undefined') return;
+    try {
+      const exported = await exportKeyPairJwk(keyPair);
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const req = indexedDB.open('scattered-keyhole-e2ee', 1);
+        req.onupgradeneeded = () => {
+          const d = req.result;
+          if (!d.objectStoreNames.contains('identity')) d.createObjectStore('identity');
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      const tx = db.transaction('identity', 'readwrite');
+      const store = tx.objectStore('identity');
+      store.put(exported, 'keypair');
+      await new Promise<void>((resolve, reject) => {
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+      db.close();
+    } catch {
+      // Persistence is best-effort; fall back to ephemeral keys.
+    }
+  }
+
   async #getKeyPair(): Promise<CryptoKeyPair> {
     if (this.#keyPair !== undefined) return this.#keyPair;
     if (this.#keyPairPromise === undefined) {
-      this.#keyPairPromise = generateKeyPair();
+      this.#keyPairPromise = (async () => {
+        const persisted = await this.#loadPersistedKeyPair();
+        if (persisted !== undefined) {
+          this.#keyPair = persisted;
+          return persisted;
+        }
+        const generated = await generateKeyPair();
+        this.#keyPair = generated;
+        void this.#persistKeyPair(generated);
+        return generated;
+      })();
     }
     try {
       const keyPair = await this.#keyPairPromise;
