@@ -3,12 +3,14 @@ type MessageActionMenuProps = {
   readonly canReact: boolean;
   readonly canEdit: boolean;
   readonly canDelete: boolean;
+  readonly canRedact: boolean;
   // From lib/pinMenuLabel: `Pin message` / `Unpin message` / null (spec B).
   readonly pinLabel: 'Pin message' | 'Unpin message' | null;
   readonly onReply: () => void;
   readonly onReact: () => void;
   readonly onEdit: () => void;
   readonly onDelete: () => void;
+  readonly onRedact: () => void;
   readonly onPin: () => void;
 };
 
@@ -19,11 +21,13 @@ export function MessageActionMenu({
   canReact,
   canEdit,
   canDelete,
+  canRedact,
   pinLabel,
   onReply,
   onReact,
   onEdit,
   onDelete,
+  onRedact,
   onPin,
 }: MessageActionMenuProps) {
   return (
@@ -69,6 +73,15 @@ export function MessageActionMenu({
           className="w-full px-3 py-1.5 text-left text-sm text-rose-400 hover:bg-zinc-800/70 rounded-md"
         >
           Delete
+        </button>
+      )}
+      {canRedact && (
+        <button
+          type="button"
+          onClick={onRedact}
+          className="w-full px-3 py-1.5 text-left text-sm text-rose-400 hover:bg-zinc-800/70 rounded-md"
+        >
+          Delete for everyone
         </button>
       )}
     </>

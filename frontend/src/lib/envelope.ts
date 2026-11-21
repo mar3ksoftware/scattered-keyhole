@@ -69,6 +69,14 @@ export function parseEnvelope(plaintext: string): ParsedEnvelope {
       : { kind: 'raw', text: plaintext, expiresAt };
   }
 
+  if (parsed['t'] === 'system') {
+    const text = parsed['text'];
+    if (typeof text !== 'string' || text.length < 1 || text.length > 500) {
+      return { kind: 'raw', text: plaintext, expiresAt };
+    }
+    return { kind: 'system', text, expiresAt };
+  }
+
   return { kind: 'raw', text: plaintext, expiresAt };
 }
 
@@ -116,6 +124,13 @@ export function wrapPollEnvelope(
 
 // Sender side of the conversation timer (Tier-3 C): timer > 0 stamps every
 // outgoing envelope with `exp = now + seconds*1000`; timer 0 sends no field.
+// Outgoing system control message envelope (Tier-4 E). `exp` optional.
+export function wrapSystemEnvelope(text: string, exp?: number): string {
+  const envelope: { t: 'system'; text: string; exp?: number } = { t: 'system', text };
+  if (exp !== undefined) envelope.exp = exp;
+  return JSON.stringify(envelope);
+}
+
 export function expForTimer(seconds: number, nowMs: number): number | undefined {
   return seconds > 0 ? nowMs + seconds * 1000 : undefined;
 }

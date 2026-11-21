@@ -468,11 +468,12 @@ function bodyOfPlaintext(
   readonly media: DecryptedMessage['media'];
   readonly poll: DecryptedMessage['poll'];
   readonly expiresAt: number | null;
+  readonly isSystem: boolean;
 } {
   // Poll questions stay out of `body` on purpose: unread/mention parsing
   // never sees them (C5), and the reply excerpt reads `poll.question`.
   if (decryptionFailed) {
-    return { body: '', reply: null, media: null, poll: null, expiresAt: null };
+    return { body: '', reply: null, media: null, poll: null, expiresAt: null, isSystem: false };
   }
   const parsed = parseEnvelope(plaintext);
   if (parsed.kind === 'media') {
@@ -482,6 +483,7 @@ function bodyOfPlaintext(
       media: parsed.descriptor,
       poll: null,
       expiresAt: parsed.expiresAt,
+      isSystem: false,
     };
   }
   if (parsed.kind === 'text') {
@@ -491,12 +493,37 @@ function bodyOfPlaintext(
       media: null,
       poll: null,
       expiresAt: parsed.expiresAt,
+      isSystem: false,
     };
   }
   if (parsed.kind === 'poll') {
-    return { body: '', reply: null, media: null, poll: parsed.poll, expiresAt: parsed.expiresAt };
+    return {
+      body: '',
+      reply: null,
+      media: null,
+      poll: parsed.poll,
+      expiresAt: parsed.expiresAt,
+      isSystem: false,
+    };
   }
-  return { body: parsed.text, reply: null, media: null, poll: null, expiresAt: parsed.expiresAt };
+  if (parsed.kind === 'system') {
+    return {
+      body: parsed.text,
+      reply: null,
+      media: null,
+      poll: null,
+      expiresAt: parsed.expiresAt,
+      isSystem: true,
+    };
+  }
+  return {
+    body: parsed.text,
+    reply: null,
+    media: null,
+    poll: null,
+    expiresAt: parsed.expiresAt,
+    isSystem: false,
+  };
 }
 
 function buildDecryptedMessage(
@@ -524,6 +551,7 @@ function buildDecryptedMessage(
     poll: unwrapped.poll,
     // `expiresAt` is optional: absent when the envelope carried no valid `exp`.
     ...(unwrapped.expiresAt !== null ? { expiresAt: unwrapped.expiresAt } : {}),
+    ...(unwrapped.isSystem ? { isSystem: true } : {}),
   };
 }
 
@@ -557,6 +585,7 @@ function buildDecryptedGroupMessage(
     poll: unwrapped.poll,
     // `expiresAt` is optional: absent when the envelope carried no valid `exp`.
     ...(unwrapped.expiresAt !== null ? { expiresAt: unwrapped.expiresAt } : {}),
+    ...(unwrapped.isSystem ? { isSystem: true } : {}),
   };
 }
 
@@ -650,6 +679,9 @@ export type ChatContextValue = {
   readonly addMember: (groupId: string, username: string) => void;
   readonly removeMember: (groupId: string, username: string) => void;
   readonly voteKick: (groupId: string, username: string) => void;
+  readonly promoteMember: (groupId: string, username: string) => void;
+  readonly demoteMember: (groupId: string, username: string) => void;
+  readonly redactMessage: (target: ConversationTarget, targetId: string) => void;
   readonly connectionStatus: 'connecting' | 'connected' | 'disconnected';
   readonly error: string | null;
   // ── Tier-1 features ──
@@ -1187,6 +1219,21 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
 
   const voteKick = useCallback((groupId: string, username: string) => {
     socketRef.current.emit(EVENTS.CLIENT.GROUP_KICK_VOTE, { groupId, username });
+  }, []);
+
+  const promoteMember = useCallback((groupId: string, username: string) => {
+    socketRef.current.emit(EVENTS.CLIENT.GROUP_MEMBER_PROMOTE, { groupId, username });
+  }, []);
+
+  const demoteMember = useCallback((groupId: string, username: string) => {
+    socketRef.current.emit(EVENTS.CLIENT.GROUP_MEMBER_DEMOTE, { groupId, username });
+  }, []);
+
+  const redactMessage = useCallback((target: ConversationTarget, targetId: string) => {
+    socketRef.current.emit(EVENTS.CLIENT.MESSAGE_REDACT, {
+      ...scopePayload(target),
+      targetId,
+    });
   }, []);
 
   // Optimistic pin/unpin (spec B): apply locally, roll back if the server
@@ -1877,6 +1924,10 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
       });
     });
 
+    socket.on(EVENTS.SERVER.NOTICE, (payload) => {
+      showError(payload.message);
+    });
+
     socket.connect();
 
     return () => {
@@ -1926,6 +1977,9 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
     addMember,
     removeMember,
     voteKick,
+    promoteMember,
+    demoteMember,
+    redactMessage,
     connectionStatus: state.connectionStatus,
     error: state.error,
     unread: state.unread,

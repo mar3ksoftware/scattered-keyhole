@@ -96,6 +96,24 @@ export class GroupStore {
     return group.members.some((m) => m.userId === userId);
   }
 
+  setMemberAdmin(groupId: GroupId, username: string, isAdmin: boolean): GroupInfo | undefined {
+    const group = this.#groups.get(groupId);
+    if (group === undefined) return undefined;
+    const target = group.members.find((m) => m.username === username);
+    if (target === undefined) return undefined;
+    // Owner's admin status is immutable.
+    if (target.userId === group.createdBy) return undefined;
+
+    const updated: GroupInfo = {
+      ...group,
+      members: group.members.map((m) =>
+        m.username === username ? { ...m, isAdmin } : m,
+      ),
+    };
+    this.#groups.set(groupId, updated);
+    return updated;
+  }
+
   destroy(): void {
     this.#groups.clear();
   }

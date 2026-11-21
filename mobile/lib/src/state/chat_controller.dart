@@ -633,6 +633,26 @@ class ChatController extends ChangeNotifier {
     _notify();
   }
 
+  void promoteMember(String groupId, String username) {
+    _socket.sendGroupMemberPromote(GroupTargetPayload(groupId: groupId, username: username));
+  }
+
+  void demoteMember(String groupId, String username) {
+    _socket.sendGroupMemberDemote(GroupTargetPayload(groupId: groupId, username: username));
+  }
+
+  void redactMessage(ConversationTarget target, String targetId) {
+    _socket.sendRedact(MessageDeletePayload(
+      to: target.isDm ? target.username : null,
+      groupId: target.isGroup ? target.groupId : null,
+      targetId: targetId,
+    ));
+  }
+
+  void kickReset(String groupId, String username) {
+    _socket.sendKickReset(GroupTargetPayload(groupId: groupId, username: username));
+  }
+
   /// One sweep of the expiry timer (spec C); exposed for tests with a fake
   /// clock.
   void purgeExpired(int nowMs) {
@@ -1234,6 +1254,11 @@ class ChatController extends ChangeNotifier {
     if (key == null) return;
     _applyDisappearing(key, payload.seconds);
     _notify();
+  }
+
+  void _handleNotice(NoticePayload payload) {
+    if (payload.message.isEmpty) return;
+    _showError(payload.message);
   }
 
   // ── Typing (C1) ────────────────────────────────────────────────────────
@@ -1978,6 +2003,7 @@ class ChatController extends ChangeNotifier {
       _socket.onGroupUpdated(_handleGroupUpdated),
       _socket.onMessagePinned(_handleMessagePinned),
       _socket.onDisappearingChanged(_handleDisappearingChanged),
+      _socket.onNotice(_handleNotice),
     ]);
   }
 
@@ -2326,6 +2352,7 @@ class ChatController extends ChangeNotifier {
       media: unwrapped.media,
       poll: unwrapped.poll,
       expiresAt: unwrapped.expiresAt,
+      isSystem: unwrapped.isSystem,
     );
   }
 
@@ -2338,22 +2365,26 @@ class ChatController extends ChangeNotifier {
     MediaDescriptor? media,
     PollDefinition? poll,
     int? expiresAt,
+    bool isSystem,
   })
   _unwrapPlaintext(String plaintext, bool decryptionFailed) {
     if (decryptionFailed) {
-      return (body: null, reply: null, media: null, poll: null, expiresAt: null);
+      return (body: null, reply: null, media: null, poll: null, expiresAt: null, isSystem: false);
     }
     final parsed = parseEnvelope(plaintext);
     if (parsed.isMedia) {
-      return (body: null, reply: null, media: parsed.media, poll: null, expiresAt: parsed.expiresAt);
+      return (body: null, reply: null, media: parsed.media, poll: null, expiresAt: parsed.expiresAt, isSystem: false);
     }
     if (parsed.isPoll) {
-      return (body: null, reply: parsed.reply, media: null, poll: parsed.poll, expiresAt: parsed.expiresAt);
+      return (body: null, reply: parsed.reply, media: null, poll: parsed.poll, expiresAt: parsed.expiresAt, isSystem: false);
     }
     if (parsed.isText) {
-      return (body: parsed.text, reply: parsed.reply, media: null, poll: null, expiresAt: parsed.expiresAt);
+      return (body: parsed.text, reply: parsed.reply, media: null, poll: null, expiresAt: parsed.expiresAt, isSystem: false);
     }
-    return (body: plaintext, reply: null, media: null, poll: null, expiresAt: parsed.expiresAt);
+    if (parsed.isSystem) {
+      return (body: parsed.systemText, reply: null, media: null, poll: null, expiresAt: parsed.expiresAt, isSystem: true);
+    }
+    return (body: plaintext, reply: null, media: null, poll: null, expiresAt: parsed.expiresAt, isSystem: false);
   }
 
   // ── Group message handling ─────────────────────────────────────────────
@@ -2486,6 +2517,7 @@ class ChatController extends ChangeNotifier {
       media: unwrapped.media,
       poll: unwrapped.poll,
       expiresAt: unwrapped.expiresAt,
+      isSystem: unwrapped.isSystem,
     );
   }
 

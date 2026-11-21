@@ -105,6 +105,10 @@ abstract interface class SocketService {
 
   /// `disappearing:set` — set a conversation's disappearing-message timer.
   void sendDisappearingSet(DisappearingSetPayload payload);
+  void sendGroupMemberPromote(GroupTargetPayload payload);
+  void sendGroupMemberDemote(GroupTargetPayload payload);
+  void sendRedact(MessageDeletePayload payload);
+  void sendKickReset(GroupTargetPayload payload);
 
   // ── Inbound: server -> client ──────────────────────────────────────────
 
@@ -203,6 +207,9 @@ abstract interface class SocketService {
 
   /// `disappearing:changed` — a conversation's timer changed (spec C).
   Unsubscribe onDisappearingChanged(void Function(DisappearingChangedPayload payload) handler);
+
+  /// `notice` — direct notice to the affected user (Tier-4).
+  Unsubscribe onNotice(void Function(NoticePayload payload) handler);
 
   // ── Connection lifecycle listeners ─────────────────────────────────────
 
@@ -357,6 +364,26 @@ class IoSocketService implements SocketService {
   @override
   void sendDisappearingSet(DisappearingSetPayload payload) {
     _socket.emit(ChatEvents.disappearingSet, payload.toJson());
+  }
+
+  @override
+  void sendGroupMemberPromote(GroupTargetPayload payload) {
+    _socket.emit(ChatEvents.groupMemberPromote, payload.toJson());
+  }
+
+  @override
+  void sendGroupMemberDemote(GroupTargetPayload payload) {
+    _socket.emit(ChatEvents.groupMemberDemote, payload.toJson());
+  }
+
+  @override
+  void sendRedact(MessageDeletePayload payload) {
+    _socket.emit(ChatEvents.messageRedact, payload.toJson());
+  }
+
+  @override
+  void sendKickReset(GroupTargetPayload payload) {
+    _socket.emit(ChatEvents.groupKickReset, payload.toJson());
   }
 
   // ── Inbound ────────────────────────────────────────────────────────────
@@ -584,6 +611,13 @@ class IoSocketService implements SocketService {
   Unsubscribe onDisappearingChanged(void Function(DisappearingChangedPayload payload) handler) {
     return _on(ChatEvents.disappearingChanged, (data) {
       handler(DisappearingChangedPayload.fromJson(asJsonMap(data)));
+    });
+  }
+
+  @override
+  Unsubscribe onNotice(void Function(NoticePayload payload) handler) {
+    return _on(ChatEvents.notice, (data) {
+      handler(NoticePayload.fromJson(asJsonMap(data)));
     });
   }
 

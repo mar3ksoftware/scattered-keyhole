@@ -361,3 +361,27 @@ export function validateProfileUpdatePayload(
 ): ValidationResult<{ readonly displayName: string; readonly status: string }> {
   return toValidationResult(profileUpdatePayloadSchema, input);
 }
+
+export function validateGroupMemberPromotePayload(
+  input: unknown,
+): ValidationResult<{ readonly groupId: string; readonly username: string }> {
+  return validateGroupTargetPayload(input);
+}
+
+export function validateGroupMemberDemotePayload(
+  input: unknown,
+): ValidationResult<{ readonly groupId: string; readonly username: string }> {
+  return validateGroupTargetPayload(input);
+}
+
+export function validateMessageRedactPayload(
+  input: unknown,
+): ValidationResult<z.infer<typeof messageDeletePayloadSchema>> {
+  return validateMessageDeletePayload(input);
+}
+
+export function validateGroupKickResetPayload(
+  input: unknown,
+): ValidationResult<{ readonly groupId: string; readonly username: string }> {
+  return validateGroupTargetPayload(input);
+}

@@ -6,6 +6,7 @@ import type { DmSettingsStore } from './dm-settings-store';
 import type { GroupStore } from './group-store';
 import type { KickVoteStore } from './kick-vote-store';
 import type { MediaAuth } from './media-auth';
+import type { TombstoneStore } from './tombstone-store';
 import type { ProfileStore } from './profile-store';
 import type { RateLimiterRegistry } from './rate-limiter';
 import type {
@@ -23,6 +24,10 @@ import type { UserRegistry } from './user-registry';
 import {
   validateDisappearingSetPayload,
   validateE2eePublicKeyPayload,
+  validateGroupKickResetPayload,
+  validateGroupMemberDemotePayload,
+  validateGroupMemberPromotePayload,
+  validateMessageRedactPayload,
   validateGroupCreatePayload,
   validateGroupMessagePayload,
   validateGroupTargetPayload,
@@ -78,6 +83,7 @@ export function createServer(
   mediaAuth: MediaAuth,
   profileStore: ProfileStore,
   dmSettingsStore: DmSettingsStore,
+  tombstoneStore: TombstoneStore,
   logger: Logger,
 ): void {
   const pendingRegistrations = new Set<string>();
@@ -131,6 +137,33 @@ export function createServer(
       socket.emit(EVENTS.SERVER.DISAPPEARING_CHANGED, {
         seconds: entry.seconds,
         to: peer.name,
+      });
+    }
+
+    // Tombstone replay: redacts the user missed while offline.
+    const replayUser = userRegistry.getUser(userId);
+    const replayUsername = replayUser?.username ?? '';
+    for (const group of groupStore.getGroupsForUser(userId)) {
+      for (const tombstone of tombstoneStore.listFor({ groupId: String(group.groupId) })) {
+        socket.emit(EVENTS.SERVER.MESSAGE_DELETED, {
+          from: userId,
+          fromUsername: replayUsername,
+          groupId: String(group.groupId),
+          targetId: tombstone.messageId,
+          timestamp: tombstone.timestamp,
+        });
+      }
+    }
+    // DM tombstones where this user is the recipient peer.
+    for (const tombstone of tombstoneStore.listFor()) {
+      if (tombstone.groupId !== undefined) continue;
+      if (tombstone.to !== replayUsername) continue;
+      socket.emit(EVENTS.SERVER.MESSAGE_DELETED, {
+        from: userId,
+        fromUsername: replayUsername,
+        to: tombstone.to,
+        targetId: tombstone.messageId,
+        timestamp: tombstone.timestamp,
       });
     }
   };
@@ -1235,6 +1268,215 @@ export function createServer(
       });
 
       logger.info({ username: sender.username }, 'profile updated');
+    });
+
+    // ── Tier-4: promote / demote ──────────────────────────────────────
+    socket.on(EVENTS.CLIENT.GROUP_MEMBER_PROMOTE, (payload) => {
+      const rlResult = rateLimiters.check(socket.id);
+      if (!rlResult.allowed) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Rate limit exceeded' });
+        return;
+      }
+      const valResult = validateGroupMemberPromotePayload(payload);
+      if (!valResult.success) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: valResult.errors.join(', ') });
+        return;
+      }
+      const sender = userRegistry.getUserBySocketId(SocketId(socket.id));
+      if (sender === undefined) return;
+
+      const groupId = GroupId(valResult.data.groupId);
+      const group = groupStore.getGroup(groupId);
+      if (group === undefined) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Group not found' });
+        return;
+      }
+      const senderMember = group.members.find((m) => m.userId === sender.userId);
+      if (senderMember?.isAdmin !== true) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Only admins can promote or demote members' });
+        return;
+      }
+      const { username } = valResult.data;
+      const target = group.members.find((m) => m.username === username);
+      if (target === undefined) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'User is not a group member' });
+        return;
+      }
+      if (target.userId === group.createdBy) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Only admins can promote or demote members' });
+        return;
+      }
+      const updated = groupStore.setMemberAdmin(groupId, username, true);
+      if (updated === undefined) return;
+      for (const member of updated.members) {
+        io.to(String(member.userId)).emit(EVENTS.SERVER.GROUP_UPDATED, {
+          groupId: valResult.data.groupId,
+          name: updated.name,
+          description: updated.description,
+          u: sender.username,
+          timestamp: Date.now(),
+        });
+      }
+      io.to(String(target.userId)).emit(EVENTS.SERVER.NOTICE, {
+        message: `You are now an admin of ${updated.name}`,
+      });
+      logger.info({ groupId, username }, 'group member promoted');
+    });
+
+    socket.on(EVENTS.CLIENT.GROUP_MEMBER_DEMOTE, (payload) => {
+      const rlResult = rateLimiters.check(socket.id);
+      if (!rlResult.allowed) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Rate limit exceeded' });
+        return;
+      }
+      const valResult = validateGroupMemberDemotePayload(payload);
+      if (!valResult.success) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: valResult.errors.join(', ') });
+        return;
+      }
+      const sender = userRegistry.getUserBySocketId(SocketId(socket.id));
+      if (sender === undefined) return;
+
+      const groupId = GroupId(valResult.data.groupId);
+      const group = groupStore.getGroup(groupId);
+      if (group === undefined) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Group not found' });
+        return;
+      }
+      const senderMember = group.members.find((m) => m.userId === sender.userId);
+      if (senderMember?.isAdmin !== true) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Only admins can promote or demote members' });
+        return;
+      }
+      const { username } = valResult.data;
+      const target = group.members.find((m) => m.username === username);
+      if (target === undefined) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'User is not a group member' });
+        return;
+      }
+      if (target.userId === group.createdBy) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Only admins can promote or demote members' });
+        return;
+      }
+      const updated = groupStore.setMemberAdmin(groupId, username, false);
+      if (updated === undefined) return;
+      for (const member of updated.members) {
+        io.to(String(member.userId)).emit(EVENTS.SERVER.GROUP_UPDATED, {
+          groupId: valResult.data.groupId,
+          name: updated.name,
+          description: updated.description,
+          u: sender.username,
+          timestamp: Date.now(),
+        });
+      }
+      io.to(String(target.userId)).emit(EVENTS.SERVER.NOTICE, {
+        message: `You are no longer an admin of ${updated.name}`,
+      });
+      logger.info({ groupId, username }, 'group member demoted');
+    });
+
+    // ── Tier-4: redact (delete others' messages) ─────────────────────
+    socket.on(EVENTS.CLIENT.MESSAGE_REDACT, (payload) => {
+      const rlResult = rateLimiters.check(socket.id);
+      if (!rlResult.allowed) {
+        socket.emit(EVENTS.SERVER.MESSAGE_REJECTED, { reason: 'Rate limit exceeded' });
+        return;
+      }
+      const valResult = validateMessageRedactPayload(payload);
+      if (!valResult.success) {
+        socket.emit(EVENTS.SERVER.MESSAGE_REJECTED, { reason: valResult.errors.join(', ') });
+        return;
+      }
+      const sender = userRegistry.getUserBySocketId(SocketId(socket.id));
+      if (sender === undefined) return;
+
+      const resolved = resolveConversation(sender, valResult.data);
+      if (resolved.reason !== undefined) {
+        socket.emit(EVENTS.SERVER.MESSAGE_REJECTED, { reason: resolved.reason });
+        return;
+      }
+      if (resolved.conversation.kind === 'group') {
+        const senderMember = resolved.conversation.members.find((m) => m.userId === sender.userId);
+        if (senderMember?.isAdmin !== true) {
+          socket.emit(EVENTS.SERVER.MESSAGE_REJECTED, { reason: 'Only admins can delete others\' messages' });
+          return;
+        }
+      } else {
+        // DM: only the two participants; redacting others' messages requires
+        // admin — DMs have no admin, so only the sender can delete own.
+        if (resolved.conversation.peer.userId !== sender.userId) {
+          // allow only if sender is one of the two; redact of peer's own msg
+          // in DM requires admin — none exists, so reject.
+          socket.emit(EVENTS.SERVER.MESSAGE_REJECTED, { reason: 'Only admins can delete others\' messages' });
+          return;
+        }
+      }
+
+      const tombstoneEntry: { messageId: string; timestamp: number; groupId?: string; to?: string } = {
+        messageId: valResult.data.targetId,
+        timestamp: Date.now(),
+      };
+      if (resolved.conversation.kind === 'group') tombstoneEntry.groupId = String(resolved.conversation.groupId);
+      else tombstoneEntry.to = resolved.conversation.peer.username;
+      tombstoneStore.create(tombstoneEntry);
+
+      fanOutExceptSender(sender.userId, resolved.conversation, (room) => {
+        io.to(room).emit(EVENTS.SERVER.MESSAGE_DELETED, {
+          from: sender.userId,
+          fromUsername: sender.username,
+          ...scopeOf(resolved.conversation),
+          targetId: valResult.data.targetId,
+          timestamp: Date.now(),
+        });
+      });
+      // Also notify the actor (message:delete fanOutExceptSender skips sender).
+      socket.emit(EVENTS.SERVER.MESSAGE_DELETED, {
+        from: sender.userId,
+        fromUsername: sender.username,
+        ...scopeOf(resolved.conversation),
+        targetId: valResult.data.targetId,
+        timestamp: Date.now(),
+      });
+    });
+
+    // ── Tier-4: vote-kick reset (admin veto) ──────────────────────────
+    socket.on(EVENTS.CLIENT.GROUP_KICK_RESET, (payload) => {
+      const rlResult = rateLimiters.check(socket.id);
+      if (!rlResult.allowed) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Rate limit exceeded' });
+        return;
+      }
+      const valResult = validateGroupKickResetPayload(payload);
+      if (!valResult.success) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: valResult.errors.join(', ') });
+        return;
+      }
+      const sender = userRegistry.getUserBySocketId(SocketId(socket.id));
+      if (sender === undefined) return;
+
+      const groupId = GroupId(valResult.data.groupId);
+      const group = groupStore.getGroup(groupId);
+      if (group === undefined) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Group not found' });
+        return;
+      }
+      const senderMember = group.members.find((m) => m.userId === sender.userId);
+      if (senderMember?.isAdmin !== true) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Only admins can promote or demote members' });
+        return;
+      }
+      const cancelled = kickVoteStore.cancel(groupId);
+      if (cancelled) {
+        broadcastTally(groupId, {
+          groupId: String(groupId),
+          username: '',
+          votes: [],
+          required: 0,
+          expiresAt: Date.now(),
+          status: 'expired',
+        } as KickTallyPayload);
+      }
+      logger.info({ groupId }, 'kick vote reset');
     });
 
     socket.on('disconnect', (reason: string) => {

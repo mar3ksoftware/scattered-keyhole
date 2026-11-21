@@ -462,3 +462,14 @@ const List<String> reactionEmojis = <String>[
   '🔥',
   '👀',
 ];
+
+/// Inbound `notice` payload (Tier-4): direct notice to affected user.
+class NoticePayload {
+  const NoticePayload({required this.message});
+
+  factory NoticePayload.fromJson(Map<String, dynamic> json) {
+    return NoticePayload(message: readString(json['message']));
+  }
+
+  final String message;
+}

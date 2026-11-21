@@ -6,6 +6,7 @@ import { config } from './config';
 import { DmSettingsStore } from './dm-settings-store';
 import { GroupStore } from './group-store';
 import { KickVoteStore } from './kick-vote-store';
+import { TombstoneStore } from './tombstone-store';
 import { logger } from './logger';
 import { MediaAuth } from './media-auth';
 import { createMediaHttpHandler } from './media-http';
@@ -42,6 +43,7 @@ const mediaStore = new MediaStore();
 const mediaAuth = new MediaAuth();
 const profileStore = new ProfileStore();
 const dmSettingsStore = new DmSettingsStore();
+const tombstoneStore = new TombstoneStore();
 const mediaRateLimiters = new RateLimiterRegistry();
 const mediaHttp = createMediaHttpHandler(
   mediaStore,
@@ -62,6 +64,7 @@ createServer(
   mediaAuth,
   profileStore,
   dmSettingsStore,
+  tombstoneStore,
   logger,
 );
 
@@ -104,6 +107,7 @@ function shutdown(): void {
   mediaAuth.destroy();
   profileStore.destroy();
   dmSettingsStore.destroy();
+  tombstoneStore.destroy();
   mediaRateLimiters.destroy();
   server.stop(true);
   process.exit(0);

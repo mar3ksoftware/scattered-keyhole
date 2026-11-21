@@ -30,8 +30,18 @@ function PresenceBadge({ online }: { readonly online: boolean }) {
 }
 
 export function GroupMembersPanel({ group, onClose }: GroupMembersPanelProps) {
-  const { user, users, directory, kickTallies, addMember, removeMember, voteKick, displayNameOf } =
-    useChat();
+  const {
+    user,
+    users,
+    directory,
+    kickTallies,
+    addMember,
+    removeMember,
+    voteKick,
+    promoteMember,
+    demoteMember,
+    displayNameOf,
+  } = useChat();
   const [addQuery, setAddQuery] = useState('');
 
   const myMembership =
@@ -135,11 +145,34 @@ export function GroupMembersPanel({ group, onClose }: GroupMembersPanelProps) {
                 <span className="ml-1.5 text-xs text-zinc-500">{member.username}</span>
               )}
             </span>
-            {member.isAdmin && (
+            {member.userId === group.createdBy && (
+              <span className="shrink-0 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-400">
+                owner
+              </span>
+            )}
+            {member.isAdmin && member.userId !== group.createdBy && (
               <span className="shrink-0 rounded-full bg-indigo-500/15 px-2 py-0.5 text-[10px] font-medium text-indigo-400">
                 admin
               </span>
             )}
+            {iAmAdmin &&
+              member.userId !== group.createdBy &&
+              member.userId !== user?.userId &&
+              (member.isAdmin
+                ? user?.userId === group.createdBy
+                : true) && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    member.isAdmin
+                      ? demoteMember(group.groupId, member.username)
+                      : promoteMember(group.groupId, member.username)
+                  }
+                  className="shrink-0 text-xs text-zinc-500 transition-colors hover:text-zinc-300"
+                >
+                  {member.isAdmin ? 'Demote' : 'Promote'}
+                </button>
+              )}
             {iAmAdmin && member.userId !== group.createdBy && member.userId !== user?.userId && (
               <button
                 type="button"
