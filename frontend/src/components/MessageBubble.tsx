@@ -108,6 +108,7 @@ export function MessageBubble({ message, showSender, onReply }: MessageBubblePro
     groups,
     pins,
     sendPin,
+    redactMessage,
   } = useChat();
 
   const [menuOpen, setMenuOpen] = useState(false);
@@ -162,6 +163,11 @@ export function MessageBubble({ message, showSender, onReply }: MessageBubblePro
   const canDelete = isOwn && !isDeleted;
   const canReply = !isDeleted;
   const canReact = !isDeleted;
+  const canRedact =
+    isGroup &&
+    !isOwn &&
+    !isDeleted &&
+    isAdminOf(groups, user?.username ?? null, target);
 
   // Pin entries (spec B): visible only to users who may pin, and only on a
   // live message — the slot's current target gets the unpin label.
@@ -250,6 +256,7 @@ export function MessageBubble({ message, showSender, onReply }: MessageBubblePro
       canReact={canReact}
       canEdit={canEdit}
       canDelete={canDelete}
+      canRedact={canRedact}
       pinLabel={pinLabel}
       onReply={handleReply}
       onReact={() => {
@@ -260,6 +267,10 @@ export function MessageBubble({ message, showSender, onReply }: MessageBubblePro
       onDelete={() => {
         setMenuOpen(false);
         setConfirmingDelete(true);
+      }}
+      onRedact={() => {
+        setMenuOpen(false);
+        redactMessage(target, message.id);
       }}
       onPin={handlePinToggle}
     />
