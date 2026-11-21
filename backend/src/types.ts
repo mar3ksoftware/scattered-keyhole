@@ -349,6 +349,19 @@ export type DisappearingChangedPayload = {
   readonly groupId?: string;
 };
 
+// ── Tier-4 payloads ───────────────────────────────────────────────────
+
+export type NoticePayload = {
+  readonly message: string;
+};
+
+export type TombstoneEntry = {
+  readonly messageId: string;
+  readonly timestamp: number;
+  readonly groupId?: string;
+  readonly to?: string;
+};
+
 // ── Discriminated unions ──────────────────────────────────────────────
 
 export type ValidationResult<T> =
@@ -423,6 +436,9 @@ export const CONSTANTS = {
   MAX_STATUS_LENGTH: 80,
   RECEIPT_UP_TO_FUTURE_MS: 60_000,
   TYPING_DEBOUNCE_MS: 3_000,
+  TOMBSTONE_CAP: 1000,
+  TOMBSTONE_TTL_MS: 24 * 60 * 60 * 1000,
+  TOMBSTONE_SWEEP_INTERVAL_MS: 30_000,
 } as const;
 
 // ── Event name map ────────────────────────────────────────────────────
@@ -450,6 +466,10 @@ export const EVENTS = {
     GROUP_MESSAGE_SEND: 'group:message:send',
     MESSAGE_PIN: 'message:pin',
     DISAPPEARING_SET: 'disappearing:set',
+    GROUP_MEMBER_PROMOTE: 'group:member:promote',
+    GROUP_MEMBER_DEMOTE: 'group:member:demote',
+    MESSAGE_REDACT: 'message:redact',
+    GROUP_KICK_RESET: 'group:kick:reset',
   },
   SERVER: {
     USER_JOINED: 'user:joined',
@@ -484,6 +504,7 @@ export const EVENTS = {
     MEDIA_TOKEN: 'media:token',
     MESSAGE_PINNED: 'message:pinned',
     DISAPPEARING_CHANGED: 'disappearing:changed',
+    NOTICE: 'notice',
   },
 } as const;
 
@@ -530,6 +551,7 @@ export type ServerToClientEvents = {
   readonly [EVENTS.SERVER.PROFILE_UPDATED]: (payload: ProfileUpdatedPayload) => void;
   readonly [EVENTS.SERVER.MESSAGE_PINNED]: (payload: MessagePinnedPayload) => void;
   readonly [EVENTS.SERVER.DISAPPEARING_CHANGED]: (payload: DisappearingChangedPayload) => void;
+  readonly [EVENTS.SERVER.NOTICE]: (payload: NoticePayload) => void;
 };
 
 export type ClientToServerEvents = {
@@ -558,6 +580,10 @@ export type ClientToServerEvents = {
   readonly [EVENTS.CLIENT.PROFILE_UPDATE]: (payload: ProfileUpdatePayload) => void;
   readonly [EVENTS.CLIENT.MESSAGE_PIN]: (payload: MessagePinPayload) => void;
   readonly [EVENTS.CLIENT.DISAPPEARING_SET]: (payload: DisappearingSetPayload) => void;
+  readonly [EVENTS.CLIENT.GROUP_MEMBER_PROMOTE]: (payload: GroupTargetPayload) => void;
+  readonly [EVENTS.CLIENT.GROUP_MEMBER_DEMOTE]: (payload: GroupTargetPayload) => void;
+  readonly [EVENTS.CLIENT.MESSAGE_REDACT]: (payload: MessageDeletePayload) => void;
+  readonly [EVENTS.CLIENT.GROUP_KICK_RESET]: (payload: GroupTargetPayload) => void;
 };
 
 // ── Utility ───────────────────────────────────────────────────────────

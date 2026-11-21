@@ -10,6 +10,7 @@ import { DmSettingsStore } from './dm-settings-store';
 import { E2eeSession } from './e2ee-session';
 import { GroupStore } from './group-store';
 import { KickVoteStore } from './kick-vote-store';
+import { TombstoneStore } from './tombstone-store';
 import { MediaAuth } from './media-auth';
 import { ProfileStore } from './profile-store';
 import { RateLimiterRegistry } from './rate-limiter';
@@ -161,6 +162,7 @@ describe('Socket.io Server', () => {
     mediaAuth = new MediaAuth();
     profileStore = new ProfileStore();
     dmSettingsStore = new DmSettingsStore();
+    const tombstoneStore = new TombstoneStore();
     createServer(
       io,
       userRegistry,
@@ -172,6 +174,7 @@ describe('Socket.io Server', () => {
       mediaAuth,
       profileStore,
       dmSettingsStore,
+      tombstoneStore,
       pino({ level: 'silent' }),
     );
 

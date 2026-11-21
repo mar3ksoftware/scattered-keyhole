@@ -9,6 +9,7 @@ import { AccountStore } from './account-store';
 import { DmSettingsStore } from './dm-settings-store';
 import { GroupStore } from './group-store';
 import { KickVoteStore } from './kick-vote-store';
+import { TombstoneStore } from './tombstone-store';
 import { MediaAuth } from './media-auth';
 import { ProfileStore } from './profile-store';
 import { RateLimiterRegistry } from './rate-limiter';
@@ -186,6 +187,7 @@ describe('Tier-3 group metadata, pins, and disappearing timers', () => {
     mediaAuth = new MediaAuth();
     profileStore = new ProfileStore();
     dmSettingsStore = new DmSettingsStore();
+    const tombstoneStore = new TombstoneStore();
     createServer(
       io,
       userRegistry,
@@ -197,6 +199,7 @@ describe('Tier-3 group metadata, pins, and disappearing timers', () => {
       mediaAuth,
       profileStore,
       dmSettingsStore,
+      tombstoneStore,
       pino({ level: 'silent' }),
     );
 
