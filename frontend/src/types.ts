@@ -82,6 +82,7 @@ export type ParsedEnvelope =
       readonly expiresAt: number | null;
     }
   | { readonly kind: 'poll'; readonly poll: PollDefinition; readonly expiresAt: number | null }
+  | { readonly kind: 'system'; readonly text: string; readonly expiresAt: number | null }
   | { readonly kind: 'raw'; readonly text: string; readonly expiresAt: number | null };
 
 // Decrypted view of a PrivateMessage (what the UI renders)
@@ -104,6 +105,8 @@ export type DecryptedMessage = {
   readonly poll: PollDefinition | null;
   // Tier-3 C: present only when the envelope carried a valid `exp`.
   readonly expiresAt?: number;
+  // Tier-4 E: system control message (rendered centered/muted).
+  readonly isSystem?: boolean;
 };
 
 // ── Media types ──
@@ -199,11 +202,17 @@ export type DecryptedGroupMessage = {
   readonly poll: PollDefinition | null;
   // Tier-3 C: present only when the envelope carried a valid `exp`.
   readonly expiresAt?: number;
+  // Tier-4 E: system control message (rendered centered/muted).
+  readonly isSystem?: boolean;
 };
 
 export type GroupTargetPayload = {
   readonly groupId: string;
   readonly username: string;
+};
+
+export type NoticePayload = {
+  readonly message: string;
 };
 
 export type GroupMemberRemovedPayload = {
@@ -510,6 +519,10 @@ export type ClientToServerEvents = {
   'message:delete': (payload: MessageDeletePayload) => void;
   'message:pin': (payload: MessagePinPayload) => void;
   'disappearing:set': (payload: DisappearingSetPayload) => void;
+  'group:member:promote': (payload: GroupTargetPayload) => void;
+  'group:member:demote': (payload: GroupTargetPayload) => void;
+  'message:redact': (payload: MessageDeletePayload) => void;
+  'group:kick:reset': (payload: GroupTargetPayload) => void;
   'poll:vote': (payload: PollVotePayload) => void;
   'poll:close': (payload: PollClosePayload) => void;
   'profile:update': (payload: ProfileUpdatePayload) => void;
@@ -545,6 +558,7 @@ export type ServerToClientEvents = {
   'message:deleted': (payload: MessageDeletedPayload) => void;
   'message:pinned': (payload: MessagePinnedPayload) => void;
   'disappearing:changed': (payload: DisappearingChangedPayload) => void;
+  notice: (payload: NoticePayload) => void;
   'poll:voted': (payload: PollVotedPayload) => void;
   'poll:closed': (payload: PollClosedPayload) => void;
   'profile:updated': (payload: ProfileUpdatedPayload) => void;
@@ -572,6 +586,10 @@ export const EVENTS = {
     MESSAGE_DELETE: 'message:delete',
     MESSAGE_PIN: 'message:pin',
     DISAPPEARING_SET: 'disappearing:set',
+    GROUP_MEMBER_PROMOTE: 'group:member:promote',
+    GROUP_MEMBER_DEMOTE: 'group:member:demote',
+    MESSAGE_REDACT: 'message:redact',
+    GROUP_KICK_RESET: 'group:kick:reset',
     POLL_VOTE: 'poll:vote',
     POLL_CLOSE: 'poll:close',
     PROFILE_UPDATE: 'profile:update',
@@ -606,6 +624,7 @@ export const EVENTS = {
     MESSAGE_DELETED: 'message:deleted',
     MESSAGE_PINNED: 'message:pinned',
     DISAPPEARING_CHANGED: 'disappearing:changed',
+    NOTICE: 'notice',
     POLL_VOTED: 'poll:voted',
     POLL_CLOSED: 'poll:closed',
     PROFILE_UPDATED: 'profile:updated',

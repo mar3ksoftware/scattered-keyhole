@@ -468,11 +468,12 @@ function bodyOfPlaintext(
   readonly media: DecryptedMessage['media'];
   readonly poll: DecryptedMessage['poll'];
   readonly expiresAt: number | null;
+  readonly isSystem: boolean;
 } {
   // Poll questions stay out of `body` on purpose: unread/mention parsing
   // never sees them (C5), and the reply excerpt reads `poll.question`.
   if (decryptionFailed) {
-    return { body: '', reply: null, media: null, poll: null, expiresAt: null };
+    return { body: '', reply: null, media: null, poll: null, expiresAt: null, isSystem: false };
   }
   const parsed = parseEnvelope(plaintext);
   if (parsed.kind === 'media') {
@@ -482,6 +483,7 @@ function bodyOfPlaintext(
       media: parsed.descriptor,
       poll: null,
       expiresAt: parsed.expiresAt,
+      isSystem: false,
     };
   }
   if (parsed.kind === 'text') {
@@ -491,12 +493,37 @@ function bodyOfPlaintext(
       media: null,
       poll: null,
       expiresAt: parsed.expiresAt,
+      isSystem: false,
     };
   }
   if (parsed.kind === 'poll') {
-    return { body: '', reply: null, media: null, poll: parsed.poll, expiresAt: parsed.expiresAt };
+    return {
+      body: '',
+      reply: null,
+      media: null,
+      poll: parsed.poll,
+      expiresAt: parsed.expiresAt,
+      isSystem: false,
+    };
   }
-  return { body: parsed.text, reply: null, media: null, poll: null, expiresAt: parsed.expiresAt };
+  if (parsed.kind === 'system') {
+    return {
+      body: parsed.text,
+      reply: null,
+      media: null,
+      poll: null,
+      expiresAt: parsed.expiresAt,
+      isSystem: true,
+    };
+  }
+  return {
+    body: parsed.text,
+    reply: null,
+    media: null,
+    poll: null,
+    expiresAt: parsed.expiresAt,
+    isSystem: false,
+  };
 }
 
 function buildDecryptedMessage(
@@ -524,6 +551,7 @@ function buildDecryptedMessage(
     poll: unwrapped.poll,
     // `expiresAt` is optional: absent when the envelope carried no valid `exp`.
     ...(unwrapped.expiresAt !== null ? { expiresAt: unwrapped.expiresAt } : {}),
+    ...(unwrapped.isSystem ? { isSystem: true } : {}),
   };
 }
 
@@ -557,6 +585,7 @@ function buildDecryptedGroupMessage(
     poll: unwrapped.poll,
     // `expiresAt` is optional: absent when the envelope carried no valid `exp`.
     ...(unwrapped.expiresAt !== null ? { expiresAt: unwrapped.expiresAt } : {}),
+    ...(unwrapped.isSystem ? { isSystem: true } : {}),
   };
 }
 
@@ -1875,6 +1904,10 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
           description: payload.description,
         },
       });
+    });
+
+    socket.on(EVENTS.SERVER.NOTICE, (payload) => {
+      showError(payload.message);
     });
 
     socket.connect();
