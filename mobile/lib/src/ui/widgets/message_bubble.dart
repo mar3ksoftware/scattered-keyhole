@@ -24,6 +24,7 @@ class MessageView {
     this.reply,
     this.edited = false,
     this.deleted = false,
+    this.isSystem = false,
   });
 
   factory MessageView.fromPrivate(DecryptedMessage message) {
@@ -40,6 +41,7 @@ class MessageView {
       reply: message.reply,
       edited: message.edited,
       deleted: message.deleted,
+      isSystem: message.isSystem,
     );
   }
 
@@ -58,6 +60,7 @@ class MessageView {
       reply: message.reply,
       edited: message.edited,
       deleted: message.deleted,
+      isSystem: message.isSystem,
     );
   }
 
@@ -100,6 +103,9 @@ class MessageView {
   /// Tombstoned message (C6) — renders `This message was deleted`.
   final bool deleted;
 
+  /// Tier-4 system control message (rendered centered/muted).
+  final bool isSystem;
+
   /// Body as rendered: the envelope body when known, the raw payload else.
   String get displayText => body ?? text;
 }
@@ -136,6 +142,7 @@ class MessageBubble extends StatelessWidget {
     this.reply,
     this.edited = false,
     this.deleted = false,
+    this.isSystem = false,
     this.reactions,
     this.readState = MessageReadState.none,
     this.segments,
@@ -176,6 +183,7 @@ class MessageBubble extends StatelessWidget {
       reply: view.reply,
       edited: view.edited,
       deleted: view.deleted,
+      isSystem: view.isSystem,
       reactions: view.id == null ? null : controller?.reactionsFor(view.id!),
       readState: readState,
       segments: segments,
@@ -208,6 +216,7 @@ class MessageBubble extends StatelessWidget {
   final Map<String, dynamic>? reply;
   final bool edited;
   final bool deleted;
+  final bool isSystem;
 
   /// Aggregated reactions: emoji → usernames (C5).
   final Map<String, Set<String>>? reactions;
@@ -682,6 +691,21 @@ class MessageBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (isSystem) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Center(
+          child: Text(
+            text,
+            style: const TextStyle(
+              fontSize: 12,
+              fontStyle: FontStyle.italic,
+              color: AppColors.textMuted,
+            ),
+          ),
+        ),
+      );
+    }
     final showSender = sender != null && !isOwn;
     return LayoutBuilder(
       builder: (context, constraints) {
