@@ -679,6 +679,9 @@ export type ChatContextValue = {
   readonly addMember: (groupId: string, username: string) => void;
   readonly removeMember: (groupId: string, username: string) => void;
   readonly voteKick: (groupId: string, username: string) => void;
+  readonly promoteMember: (groupId: string, username: string) => void;
+  readonly demoteMember: (groupId: string, username: string) => void;
+  readonly redactMessage: (target: ConversationTarget, targetId: string) => void;
   readonly connectionStatus: 'connecting' | 'connected' | 'disconnected';
   readonly error: string | null;
   // ── Tier-1 features ──
@@ -1216,6 +1219,21 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
 
   const voteKick = useCallback((groupId: string, username: string) => {
     socketRef.current.emit(EVENTS.CLIENT.GROUP_KICK_VOTE, { groupId, username });
+  }, []);
+
+  const promoteMember = useCallback((groupId: string, username: string) => {
+    socketRef.current.emit(EVENTS.CLIENT.GROUP_MEMBER_PROMOTE, { groupId, username });
+  }, []);
+
+  const demoteMember = useCallback((groupId: string, username: string) => {
+    socketRef.current.emit(EVENTS.CLIENT.GROUP_MEMBER_DEMOTE, { groupId, username });
+  }, []);
+
+  const redactMessage = useCallback((target: ConversationTarget, targetId: string) => {
+    socketRef.current.emit(EVENTS.CLIENT.MESSAGE_REDACT, {
+      ...scopePayload(target),
+      targetId,
+    });
   }, []);
 
   // Optimistic pin/unpin (spec B): apply locally, roll back if the server
@@ -1959,6 +1977,9 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
     addMember,
     removeMember,
     voteKick,
+    promoteMember,
+    demoteMember,
+    redactMessage,
     connectionStatus: state.connectionStatus,
     error: state.error,
     unread: state.unread,
