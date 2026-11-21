@@ -2326,6 +2326,7 @@ class ChatController extends ChangeNotifier {
       media: unwrapped.media,
       poll: unwrapped.poll,
       expiresAt: unwrapped.expiresAt,
+      isSystem: unwrapped.isSystem,
     );
   }
 
@@ -2338,22 +2339,26 @@ class ChatController extends ChangeNotifier {
     MediaDescriptor? media,
     PollDefinition? poll,
     int? expiresAt,
+    bool isSystem,
   })
   _unwrapPlaintext(String plaintext, bool decryptionFailed) {
     if (decryptionFailed) {
-      return (body: null, reply: null, media: null, poll: null, expiresAt: null);
+      return (body: null, reply: null, media: null, poll: null, expiresAt: null, isSystem: false);
     }
     final parsed = parseEnvelope(plaintext);
     if (parsed.isMedia) {
-      return (body: null, reply: null, media: parsed.media, poll: null, expiresAt: parsed.expiresAt);
+      return (body: null, reply: null, media: parsed.media, poll: null, expiresAt: parsed.expiresAt, isSystem: false);
     }
     if (parsed.isPoll) {
-      return (body: null, reply: parsed.reply, media: null, poll: parsed.poll, expiresAt: parsed.expiresAt);
+      return (body: null, reply: parsed.reply, media: null, poll: parsed.poll, expiresAt: parsed.expiresAt, isSystem: false);
     }
     if (parsed.isText) {
-      return (body: parsed.text, reply: parsed.reply, media: null, poll: null, expiresAt: parsed.expiresAt);
+      return (body: parsed.text, reply: parsed.reply, media: null, poll: null, expiresAt: parsed.expiresAt, isSystem: false);
     }
-    return (body: plaintext, reply: null, media: null, poll: null, expiresAt: parsed.expiresAt);
+    if (parsed.isSystem) {
+      return (body: parsed.systemText, reply: null, media: null, poll: null, expiresAt: parsed.expiresAt, isSystem: true);
+    }
+    return (body: plaintext, reply: null, media: null, poll: null, expiresAt: parsed.expiresAt, isSystem: false);
   }
 
   // ── Group message handling ─────────────────────────────────────────────
@@ -2486,6 +2491,7 @@ class ChatController extends ChangeNotifier {
       media: unwrapped.media,
       poll: unwrapped.poll,
       expiresAt: unwrapped.expiresAt,
+      isSystem: unwrapped.isSystem,
     );
   }
 

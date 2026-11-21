@@ -136,6 +136,7 @@ class DecryptedMessage {
     this.media,
     this.poll,
     this.expiresAt,
+    this.isSystem = false,
   });
 
   factory DecryptedMessage.fromJson(Map<String, dynamic> json) {
@@ -192,6 +193,7 @@ class DecryptedMessage {
   /// Disappearance deadline in Unix epoch ms from the envelope's `exp`
   /// (spec C); null when the timer is off or the value was malformed.
   final int? expiresAt;
+  final bool isSystem;
 
   /// The other participant in this conversation, regardless of direction.
   String get peerUsername => isOwn ? toUsername : fromUsername;
@@ -226,6 +228,7 @@ class DecryptedMessage {
     MediaDescriptor? media,
     PollDefinition? poll,
     int? expiresAt,
+    bool? isSystem,
   }) {
     return DecryptedMessage(
       id: id ?? this.id,
@@ -244,6 +247,7 @@ class DecryptedMessage {
       media: media ?? this.media,
       poll: poll ?? this.poll,
       expiresAt: expiresAt ?? this.expiresAt,
+      isSystem: isSystem ?? this.isSystem,
     );
   }
 }
@@ -342,6 +346,7 @@ class DecryptedGroupMessage {
     this.media,
     this.poll,
     this.expiresAt,
+    this.isSystem = false,
   });
 
   factory DecryptedGroupMessage.fromJson(Map<String, dynamic> json) {
@@ -396,6 +401,7 @@ class DecryptedGroupMessage {
   /// Disappearance deadline in Unix epoch ms from the envelope's `exp`
   /// (spec C); null when the timer is off or the value was malformed.
   final int? expiresAt;
+  final bool isSystem;
 
   Map<String, dynamic> toJson() => <String, dynamic>{
     if (id.isNotEmpty) 'id': id,
@@ -426,6 +432,7 @@ class DecryptedGroupMessage {
     MediaDescriptor? media,
     PollDefinition? poll,
     int? expiresAt,
+    bool? isSystem,
   }) {
     return DecryptedGroupMessage(
       id: id ?? this.id,
@@ -443,6 +450,7 @@ class DecryptedGroupMessage {
       media: media ?? this.media,
       poll: poll ?? this.poll,
       expiresAt: expiresAt ?? this.expiresAt,
+      isSystem: isSystem ?? this.isSystem,
     );
   }
 }

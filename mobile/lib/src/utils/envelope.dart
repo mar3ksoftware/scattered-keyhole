@@ -14,6 +14,7 @@ class ParsedEnvelope {
   final PollDefinition? poll;
   final String? raw;
   final Map<String, dynamic>? reply;
+  final String? systemText;
 
   /// Disappearance deadline (spec C) parsed from the top-level `exp` field;
   /// null when absent or malformed (drop-never-reject).
@@ -26,12 +27,14 @@ class ParsedEnvelope {
     this.raw,
     this.reply,
     this.expiresAt,
+    this.systemText,
   });
 
   bool get isText => text != null;
   bool get isMedia => media != null;
   bool get isPoll => poll != null;
   bool get isRaw => raw != null;
+  bool get isSystem => systemText != null;
 }
 
 Map<String, dynamic>? _parseReplyRef(dynamic value) {
@@ -105,6 +108,14 @@ ParsedEnvelope parseEnvelope(String decrypted) {
       reply: _parseReplyRef(envelope['r']),
       expiresAt: expiresAt,
     );
+  }
+
+  if (t == 'system') {
+    final text = envelope['text'];
+    if (text is! String || text.isEmpty || text.length > 500) {
+      return ParsedEnvelope(raw: decrypted, expiresAt: expiresAt);
+    }
+    return ParsedEnvelope(systemText: text, expiresAt: expiresAt);
   }
 
   return ParsedEnvelope(raw: decrypted, expiresAt: expiresAt);
