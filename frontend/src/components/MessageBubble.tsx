@@ -121,6 +121,7 @@ export function MessageBubble({ message, showSender, onReply }: MessageBubblePro
   const isGroup = 'groupId' in message;
   const isDeleted = message.deleted;
   const isOwn = message.isOwn;
+  const isSystem = message.isSystem === true;
   const isMedia = message.media != null && !message.decryptionFailed;
   const isPoll = message.poll != null && !message.decryptionFailed;
 
@@ -263,6 +264,14 @@ export function MessageBubble({ message, showSender, onReply }: MessageBubblePro
       onPin={handlePinToggle}
     />
   );
+
+  if (isSystem) {
+    return (
+      <div ref={rootRef} id={`message-${message.id}`} className="flex justify-center py-1">
+        <span className="text-xs italic text-zinc-500">{message.body || message.plaintext}</span>
+      </div>
+    );
+  }
 
   return (
     <div
