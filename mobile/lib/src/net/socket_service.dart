@@ -105,6 +105,10 @@ abstract interface class SocketService {
 
   /// `disappearing:set` — set a conversation's disappearing-message timer.
   void sendDisappearingSet(DisappearingSetPayload payload);
+  void sendGroupMemberPromote(GroupTargetPayload payload);
+  void sendGroupMemberDemote(GroupTargetPayload payload);
+  void sendRedact(MessageDeletePayload payload);
+  void sendKickReset(GroupTargetPayload payload);
 
   // ── Inbound: server -> client ──────────────────────────────────────────
 
@@ -360,6 +364,26 @@ class IoSocketService implements SocketService {
   @override
   void sendDisappearingSet(DisappearingSetPayload payload) {
     _socket.emit(ChatEvents.disappearingSet, payload.toJson());
+  }
+
+  @override
+  void sendGroupMemberPromote(GroupTargetPayload payload) {
+    _socket.emit(ChatEvents.groupMemberPromote, payload.toJson());
+  }
+
+  @override
+  void sendGroupMemberDemote(GroupTargetPayload payload) {
+    _socket.emit(ChatEvents.groupMemberDemote, payload.toJson());
+  }
+
+  @override
+  void sendRedact(MessageDeletePayload payload) {
+    _socket.emit(ChatEvents.messageRedact, payload.toJson());
+  }
+
+  @override
+  void sendKickReset(GroupTargetPayload payload) {
+    _socket.emit(ChatEvents.groupKickReset, payload.toJson());
   }
 
   // ── Inbound ────────────────────────────────────────────────────────────

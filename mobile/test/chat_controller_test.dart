@@ -180,6 +180,22 @@ class FakeSocketService implements SocketService {
   void sendDisappearingSet(DisappearingSetPayload payload) =>
       _record(ChatEvents.disappearingSet, payload);
 
+  @override
+  void sendGroupMemberPromote(GroupTargetPayload payload) =>
+      _record(ChatEvents.groupMemberPromote, payload);
+
+  @override
+  void sendGroupMemberDemote(GroupTargetPayload payload) =>
+      _record(ChatEvents.groupMemberDemote, payload);
+
+  @override
+  void sendRedact(MessageDeletePayload payload) =>
+      _record(ChatEvents.messageRedact, payload);
+
+  @override
+  void sendKickReset(GroupTargetPayload payload) =>
+      _record(ChatEvents.groupKickReset, payload);
+
   // ── Inbound ────────────────────────────────────────────────────────────
 
   @override

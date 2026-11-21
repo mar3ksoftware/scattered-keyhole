@@ -633,6 +633,26 @@ class ChatController extends ChangeNotifier {
     _notify();
   }
 
+  void promoteMember(String groupId, String username) {
+    _socket.sendGroupMemberPromote(GroupTargetPayload(groupId: groupId, username: username));
+  }
+
+  void demoteMember(String groupId, String username) {
+    _socket.sendGroupMemberDemote(GroupTargetPayload(groupId: groupId, username: username));
+  }
+
+  void redactMessage(ConversationTarget target, String targetId) {
+    _socket.sendRedact(MessageDeletePayload(
+      to: target.isDm ? target.username : null,
+      groupId: target.isGroup ? target.groupId : null,
+      targetId: targetId,
+    ));
+  }
+
+  void kickReset(String groupId, String username) {
+    _socket.sendKickReset(GroupTargetPayload(groupId: groupId, username: username));
+  }
+
   /// One sweep of the expiry timer (spec C); exposed for tests with a fake
   /// clock.
   void purgeExpired(int nowMs) {
