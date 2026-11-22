@@ -77,15 +77,18 @@ export async function importPublicKey(base64key: string): Promise<CryptoKey> {
 
 // ── Shared key derivation (ECDH → HKDF → AES-GCM) ──────────────────────
 
+export async function deriveEcdhBits(
+  privateKey: CryptoKey,
+  peerPublicKey: CryptoKey,
+): Promise<ArrayBuffer> {
+  return crypto.subtle.deriveBits({ name: 'ECDH', public: peerPublicKey }, privateKey, 256);
+}
+
 export async function deriveSharedKey(
   privateKey: CryptoKey,
   peerPublicKey: CryptoKey,
 ): Promise<CryptoKey> {
-  const sharedSecret = await crypto.subtle.deriveBits(
-    { name: 'ECDH', public: peerPublicKey },
-    privateKey,
-    256,
-  );
+  const sharedSecret = await deriveEcdhBits(privateKey, peerPublicKey);
 
   const hkdfKey = await crypto.subtle.importKey('raw', sharedSecret, { name: 'HKDF' }, false, [
     'deriveBits',
@@ -141,17 +144,34 @@ export async function decrypt(
 // ── Post-quantum (Tier-6): ML-KEM-768 hybrid ──────────────────────────
 import { createMlKem768 } from 'mlkem';
 
-const mlkem = createMlKem768();
+let mlkemPromise: Promise<any> | undefined;
 
-export async function generatePqKeyPair(): Promise<{ publicKey: Uint8Array; privateKey: Uint8Array }> {
-  return { publicKey: mlkem.generateKeyPair()[0], privateKey: mlkem.generateKeyPair()[1] };
+async function getMlkem() {
+  if (mlkemPromise === undefined) mlkemPromise = createMlKem768();
+  return mlkemPromise;
 }
 
-export function pqEncapsulate(publicKey: Uint8Array): { ciphertext: Uint8Array; sharedSecret: Uint8Array } {
+export async function generatePqKeyPair(): Promise<{
+  publicKey: Uint8Array;
+  privateKey: Uint8Array;
+}> {
+  const mlkem = await getMlkem();
+  const [pk, sk] = mlkem.generateKeyPair();
+  return { publicKey: pk, privateKey: sk };
+}
+
+export async function pqEncapsulate(
+  publicKey: Uint8Array,
+): Promise<{ ciphertext: Uint8Array; sharedSecret: Uint8Array }> {
+  const mlkem = await getMlkem();
   const [ct, ss] = mlkem.encap(publicKey);
   return { ciphertext: ct, sharedSecret: ss };
 }
 
-export function pqDecapsulate(privateKey: Uint8Array, ciphertext: Uint8Array): Uint8Array {
+export async function pqDecapsulate(
+  privateKey: Uint8Array,
+  ciphertext: Uint8Array,
+): Promise<Uint8Array> {
+  const mlkem = await getMlkem();
   return mlkem.decap(ciphertext, privateKey);
 }
