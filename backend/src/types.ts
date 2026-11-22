@@ -69,12 +69,14 @@ export type EncryptedMessagePayload = {
 export type E2eePublicKeyPayload = {
   readonly to: string;
   readonly publicKey: string;
+  readonly mlkemPublicKey?: string | undefined;
 };
 
 export type E2eePublicKeyRelay = {
   readonly from: UserId;
   readonly fromUsername: string;
   readonly publicKey: string;
+  readonly mlkemPublicKey?: string | undefined;
 };
 
 // ── Tier-8 call signaling payloads ──

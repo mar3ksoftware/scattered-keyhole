@@ -9,8 +9,11 @@ import {
   exportKeyPairJwk,
   exportPublicKey,
   generateKeyPair,
+  generatePqKeyPair,
   importKeyPairJwk,
   importPublicKey,
+  pqDecapsulate,
+  pqEncapsulate,
 } from './e2ee';
 
 export class E2eeSession {
@@ -18,12 +21,14 @@ export class E2eeSession {
   #keyPairPromise: Promise<CryptoKeyPair> | undefined;
   #sharedKeys: Map<string, CryptoKey>;
   #peerPublicKeys: Map<string, string>;
+  #pqKeyPair: { publicKey: Uint8Array; privateKey: Uint8Array } | undefined;
 
   constructor() {
     this.#keyPair = undefined;
     this.#keyPairPromise = undefined;
     this.#sharedKeys = new Map();
     this.#peerPublicKeys = new Map();
+    this.#pqKeyPair = undefined;
   }
 
   // Serialize keypair generation: multiple public-key exchanges can start
@@ -109,6 +114,18 @@ export class E2eeSession {
   async getPublicKey(): Promise<string> {
     const keyPair = await this.#getKeyPair();
     return exportPublicKey(keyPair.publicKey);
+  }
+
+  // Tier-6 PQ: ML-KEM-768 public key for hybrid key exchange.
+  getPqPublicKey(): string {
+    if (this.#pqKeyPair === undefined) {
+      this.#pqKeyPair = generatePqKeyPair();
+    }
+    return btoa(String.fromCharCode(...this.#pqKeyPair!.publicKey));
+  }
+
+  getPqPrivateKey(): Uint8Array | undefined {
+    return this.#pqKeyPair?.privateKey;
   }
 
   // Derive a shared key with ourselves so group messages echoed back to the

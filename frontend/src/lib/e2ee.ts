@@ -137,3 +137,21 @@ export async function decrypt(
   );
   return new TextDecoder().decode(plaintextBuffer);
 }
+
+// ── Post-quantum (Tier-6): ML-KEM-768 hybrid ──────────────────────────
+import { createMlKem768 } from 'mlkem';
+
+const mlkem = createMlKem768();
+
+export async function generatePqKeyPair(): Promise<{ publicKey: Uint8Array; privateKey: Uint8Array }> {
+  return { publicKey: mlkem.generateKeyPair()[0], privateKey: mlkem.generateKeyPair()[1] };
+}
+
+export function pqEncapsulate(publicKey: Uint8Array): { ciphertext: Uint8Array; sharedSecret: Uint8Array } {
+  const [ct, ss] = mlkem.encap(publicKey);
+  return { ciphertext: ct, sharedSecret: ss };
+}
+
+export function pqDecapsulate(privateKey: Uint8Array, ciphertext: Uint8Array): Uint8Array {
+  return mlkem.decap(ciphertext, privateKey);
+}
