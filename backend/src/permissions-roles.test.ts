@@ -10,6 +10,7 @@ import { DmSettingsStore } from './dm-settings-store';
 import { GroupStore } from './group-store';
 import { KickVoteStore } from './kick-vote-store';
 import { TombstoneStore } from './tombstone-store';
+import { MessageStore } from './message-store';
 import { MediaAuth } from './media-auth';
 import { ProfileStore } from './profile-store';
 import { RateLimiterRegistry } from './rate-limiter';
@@ -71,7 +72,8 @@ beforeAll(async () => {
   profileStore = new ProfileStore();
   dmSettingsStore = new DmSettingsStore();
   tombstoneStore = new TombstoneStore();
-  createServer(io, userRegistry, rateLimiters, accountStore, groupStore, userDirectory, kickVoteStore, mediaAuth, profileStore, dmSettingsStore, tombstoneStore, pino({ level: 'silent' }));
+  const messageStore = new MessageStore(db);
+  createServer(io, userRegistry, rateLimiters, accountStore, groupStore, userDirectory, kickVoteStore, mediaAuth, profileStore, dmSettingsStore, tombstoneStore, messageStore, pino({ level: 'silent' }));
   const handler = engine.handler();
   bunServer = Bun.serve({ port: 0, idleTimeout: 30, fetch: handler.fetch, websocket: handler.websocket });
   port = bunServer.port!;

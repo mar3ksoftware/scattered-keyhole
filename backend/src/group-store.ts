@@ -9,7 +9,7 @@ export class GroupStore {
     this.#groups = new Map();
   }
 
-  createGroup(name: string, creator: UserInfo, description = ''): GroupInfo {
+  createGroup(name: string, creator: UserInfo, description = '', persistent = false): GroupInfo {
     const groupId = makeGroupId(randomUUID());
     const creatorMember: GroupMember = {
       userId: creator.userId,
@@ -21,6 +21,7 @@ export class GroupStore {
       name,
       description,
       disappearing: 0,
+      persistent,
       members: [creatorMember],
       createdBy: creator.userId,
       createdAt: Date.now(),

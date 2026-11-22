@@ -132,6 +132,7 @@ export type GroupInfo = {
   readonly name: string;
   readonly description: string;
   readonly disappearing: number;
+  readonly persistent: boolean;
   readonly members: readonly GroupMember[];
   readonly createdBy: UserId;
   readonly createdAt: number;

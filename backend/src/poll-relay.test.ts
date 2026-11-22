@@ -10,6 +10,7 @@ import { DmSettingsStore } from './dm-settings-store';
 import { GroupStore } from './group-store';
 import { KickVoteStore } from './kick-vote-store';
 import { TombstoneStore } from './tombstone-store';
+import { MessageStore } from './message-store';
 import { MediaAuth } from './media-auth';
 import { ProfileStore } from './profile-store';
 import { RateLimiterRegistry } from './rate-limiter';
@@ -145,6 +146,7 @@ describe('Poll relays', () => {
     mediaAuth = new MediaAuth();
     profileStore = new ProfileStore();
     dmSettingsStore = new DmSettingsStore();
+    const messageStore = new MessageStore(db);
     const tombstoneStore = new TombstoneStore();
     createServer(
       io,
@@ -158,6 +160,7 @@ describe('Poll relays', () => {
       profileStore,
       dmSettingsStore,
       tombstoneStore,
+      messageStore,
       pino({ level: 'silent' }),
     );
 

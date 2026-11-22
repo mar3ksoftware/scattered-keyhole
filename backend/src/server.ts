@@ -4,6 +4,7 @@ import type { Server as IoServer, Socket } from 'socket.io';
 import type { AccountStore } from './account-store';
 import type { DmSettingsStore } from './dm-settings-store';
 import type { GroupStore } from './group-store';
+import type { MessageStore } from './message-store';
 import type { KickVoteStore } from './kick-vote-store';
 import type { MediaAuth } from './media-auth';
 import type { TombstoneStore } from './tombstone-store';
@@ -84,6 +85,7 @@ export function createServer(
   profileStore: ProfileStore,
   dmSettingsStore: DmSettingsStore,
   tombstoneStore: TombstoneStore,
+  messageStore: MessageStore,
   logger: Logger,
 ): void {
   const pendingRegistrations = new Set<string>();
@@ -118,10 +120,26 @@ export function createServer(
   // Join/reconnect snapshot. Order matters: clients clear stored kick tallies
   // on active_groups, then re-receive the still-active ones.
   const sendSnapshots = (socket: TypedSocket, userId: UserId): void => {
+    const userGroups = groupStore.getGroupsForUser(userId);
     socket.emit(
       EVENTS.SERVER.ACTIVE_GROUPS,
-      groupStore.getGroupsForUser(userId).map(withProfileGroup),
+      userGroups.map(withProfileGroup),
     );
+
+    // Persistent rooms: replay stored messages the user may have missed.
+    for (const group of userGroups) {
+      if (!group.persistent) continue;
+      for (const stored of messageStore.forGroup(String(group.groupId))) {
+        socket.emit(EVENTS.SERVER.GROUP_MESSAGE, {
+          groupId: stored.groupId,
+          from: makeUserId(stored.from),
+          fromUsername: stored.fromUsername,
+          id: stored.id,
+          ciphertexts: stored.ciphertexts,
+          timestamp: stored.timestamp,
+        });
+      }
+    }
     socket.emit(EVENTS.SERVER.USERS_DIRECTORY, userDirectory.all());
     for (const tally of kickVoteStore.activeTallies()) {
       if (groupStore.isMember(GroupId(tally.groupId), userId)) {
@@ -533,6 +551,7 @@ export function createServer(
         valResult.data.name,
         creator,
         valResult.data.description,
+        valResult.data.persistent,
       );
 
       for (const invitee of invitees) {
@@ -886,6 +905,20 @@ export function createServer(
         ciphertexts: valResult.data.ciphertexts,
         timestamp: Date.now(),
       };
+
+      // Persistent rooms: store the ciphertext payload server-side so it can
+      // be replayed to members who rejoin (Tier-7). E2EE preserved — the
+      // server only holds opaque ciphertexts.
+      if (group.persistent) {
+        messageStore.store({
+          id: message.id,
+          groupId: message.groupId,
+          from: message.from,
+          fromUsername: message.fromUsername,
+          ciphertexts: message.ciphertexts,
+          timestamp: message.timestamp,
+        });
+      }
 
       for (const member of group.members) {
         if (member.userId === sender.userId) continue;
