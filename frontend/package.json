@@ -17,6 +17,7 @@
     "frimousse": "^0.3.0",
     "linkify-react": "^4.3.3",
     "linkifyjs": "^4.3.3",
+    "mlkem": "^3.0.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "socket.io-client": "^4.8.3",

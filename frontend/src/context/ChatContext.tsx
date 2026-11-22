@@ -1559,7 +1559,8 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
     const sendPublicKeyTo = (to: string) => {
       e2eeRef.current.getPublicKey().then(
         (publicKey) => {
-          socket.emit(EVENTS.CLIENT.E2EE_PUBLIC_KEY, { to, publicKey });
+          const mlkemPublicKey = e2eeRef.current.getPqPublicKey();
+          socket.emit(EVENTS.CLIENT.E2EE_PUBLIC_KEY, { to, publicKey, mlkemPublicKey });
         },
         () => {},
       );
