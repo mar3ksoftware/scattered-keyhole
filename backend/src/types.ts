@@ -77,6 +77,19 @@ export type E2eePublicKeyRelay = {
   readonly publicKey: string;
 };
 
+// ── Tier-8 call signaling payloads ──
+export type CallOfferPayload = { readonly to: string; readonly sdp: string };
+export type CallAnswerPayload = { readonly to: string; readonly sdp: string };
+export type CallIcePayload = { readonly to: string; readonly candidate: string };
+export type CallEndPayload = { readonly to: string };
+export type CallRejectPayload = { readonly to: string };
+
+export type CallOfferRelay = { readonly from: UserId; readonly fromUsername: string; readonly sdp: string };
+export type CallAnswerRelay = { readonly from: UserId; readonly fromUsername: string; readonly sdp: string };
+export type CallIceRelay = { readonly from: UserId; readonly fromUsername: string; readonly candidate: string };
+export type CallEndRelay = { readonly from: UserId; readonly fromUsername: string };
+export type CallRejectRelay = { readonly from: UserId; readonly fromUsername: string };
+
 export type RegisterPayload = {
   readonly username: string;
   readonly password: string;
@@ -457,6 +470,11 @@ export const EVENTS = {
     POLL_CLOSE: 'poll:close',
     PROFILE_UPDATE: 'profile:update',
     E2EE_PUBLIC_KEY: 'e2ee:public_key',
+    CALL_OFFER: 'call:offer',
+    CALL_ANSWER: 'call:answer',
+    CALL_ICE: 'call:ice',
+    CALL_END: 'call:end',
+    CALL_REJECT: 'call:reject',
     USER_REGISTER: 'user:register',
     USER_LOGIN: 'user:login',
     GROUP_CREATE: 'group:create',
@@ -477,6 +495,11 @@ export const EVENTS = {
     USER_LEFT: 'user:left',
     PRIVATE_MESSAGE: 'private_message',
     E2EE_PUBLIC_KEY: 'e2ee:public_key',
+    CALL_OFFER: 'call:offer',
+    CALL_ANSWER: 'call:answer',
+    CALL_ICE: 'call:ice',
+    CALL_END: 'call:end',
+    CALL_REJECT: 'call:reject',
     DELIVERY_FAILED: 'delivery_failed',
     MESSAGE_REJECTED: 'message_rejected',
     TYPING_CHANGED: 'typing:changed',
@@ -516,6 +539,11 @@ export type ServerToClientEvents = {
   readonly [EVENTS.SERVER.USER_LEFT]: (payload: UserLeftPayload) => void;
   readonly [EVENTS.SERVER.PRIVATE_MESSAGE]: (message: PrivateMessage) => void;
   readonly [EVENTS.SERVER.E2EE_PUBLIC_KEY]: (relay: E2eePublicKeyRelay) => void;
+  readonly [EVENTS.SERVER.CALL_OFFER]: (relay: CallOfferRelay) => void;
+  readonly [EVENTS.SERVER.CALL_ANSWER]: (relay: CallAnswerRelay) => void;
+  readonly [EVENTS.SERVER.CALL_ICE]: (relay: CallIceRelay) => void;
+  readonly [EVENTS.SERVER.CALL_END]: (relay: CallEndRelay) => void;
+  readonly [EVENTS.SERVER.CALL_REJECT]: (relay: CallRejectRelay) => void;
   readonly [EVENTS.SERVER.DELIVERY_FAILED]: (result: DeliveryFailedPayload) => void;
   readonly [EVENTS.SERVER.MESSAGE_REJECTED]: (payload: MessageRejectedPayload) => void;
   readonly [EVENTS.SERVER.ACTIVE_USERS]: (users: readonly UserInfo[]) => void;
@@ -559,6 +587,11 @@ export type ClientToServerEvents = {
   readonly [EVENTS.CLIENT.USER_JOIN]: (payload: UserJoinPayload) => void;
   readonly [EVENTS.CLIENT.MESSAGE_SEND]: (payload: EncryptedMessagePayload) => void;
   readonly [EVENTS.CLIENT.E2EE_PUBLIC_KEY]: (payload: E2eePublicKeyPayload) => void;
+  readonly [EVENTS.CLIENT.CALL_OFFER]: (payload: CallOfferPayload) => void;
+  readonly [EVENTS.CLIENT.CALL_ANSWER]: (payload: CallAnswerPayload) => void;
+  readonly [EVENTS.CLIENT.CALL_ICE]: (payload: CallIcePayload) => void;
+  readonly [EVENTS.CLIENT.CALL_END]: (payload: CallEndPayload) => void;
+  readonly [EVENTS.CLIENT.CALL_REJECT]: (payload: CallRejectPayload) => void;
   readonly [EVENTS.CLIENT.USER_REGISTER]: (payload: RegisterPayload) => void;
   readonly [EVENTS.CLIENT.USER_LOGIN]: (payload: LoginPayload) => void;
   readonly [EVENTS.CLIENT.GROUP_CREATE]: (payload: {
