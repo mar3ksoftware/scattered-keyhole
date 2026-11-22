@@ -4,6 +4,7 @@ import { Server } from 'socket.io';
 import { AccountStore } from './account-store';
 import { config } from './config';
 import { DmSettingsStore } from './dm-settings-store';
+import { MessageStore } from './message-store';
 import { GroupStore } from './group-store';
 import { KickVoteStore } from './kick-vote-store';
 import { TombstoneStore } from './tombstone-store';
@@ -48,6 +49,7 @@ const mediaStore = new MediaStore(
 const mediaAuth = new MediaAuth();
 const profileStore = new ProfileStore();
 const dmSettingsStore = new DmSettingsStore();
+const messageStore = new MessageStore(db);
 const tombstoneStore = new TombstoneStore();
 const mediaRateLimiters = new RateLimiterRegistry();
 const mediaHttp = createMediaHttpHandler(
@@ -70,6 +72,7 @@ createServer(
   profileStore,
   dmSettingsStore,
   tombstoneStore,
+  messageStore,
   logger,
 );
 

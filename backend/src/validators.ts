@@ -53,6 +53,7 @@ const e2eePublicKeyPayloadSchema = z.strictObject({
 const groupCreatePayloadSchema = z.strictObject({
   name: z.string().min(1).max(CONSTANTS.MAX_GROUP_NAME_LENGTH),
   description: z.string().max(CONSTANTS.MAX_GROUP_DESCRIPTION_LENGTH).default(''),
+  persistent: z.boolean().default(false),
   members: z
     .array(z.string().min(1).max(CONSTANTS.MAX_USERNAME_LENGTH))
     .max(CONSTANTS.MAX_GROUP_MEMBERS),
@@ -273,6 +274,7 @@ export function validateE2eePublicKeyPayload(
 export function validateGroupCreatePayload(input: unknown): ValidationResult<{
   readonly name: string;
   readonly description: string;
+  readonly persistent: boolean;
   readonly members: readonly string[];
 }> {
   return toValidationResult(groupCreatePayloadSchema, input);
