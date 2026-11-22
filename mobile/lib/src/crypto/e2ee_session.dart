@@ -8,6 +8,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:pointycastle/digests/sha256.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'e2ee.dart';
 import 'e2ee.dart'
@@ -16,8 +17,10 @@ import 'e2ee.dart'
         decrypt,
         deriveSharedKey,
         encrypt,
+        exportPrivateKeyHex,
         exportPublicKey,
         generateKeyPair,
+        importKeyPairFromHex,
         importPublicKey;
 
 /// Manages the local ECDH keypair and per-peer shared AES keys.
@@ -29,13 +32,35 @@ class E2eeSession {
 
   /// Returns the P-256 keypair, generating it once and serializing concurrent
   /// callers so every key exchange uses the same identity.
+  static const String _prefsKey = 'e2ee_identity_scalar';
+
+  Future<E2eeKeyPair> _loadOrGenerate() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final stored = prefs.getString(_prefsKey);
+      if (stored != null && stored.isNotEmpty) {
+        return await crypto.importKeyPairFromHex(stored);
+      }
+    } catch (_) {
+      // Fall through to generation.
+    }
+    final generated = await crypto.generateKeyPair();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_prefsKey, crypto.exportPrivateKeyHex(generated));
+    } catch (_) {
+      // Persistence is best-effort.
+    }
+    return generated;
+  }
+
   Future<E2eeKeyPair> _getKeyPair() async {
     final cached = _keyPair;
     if (cached != null) return cached;
 
     var future = _keyPairFuture;
     if (future == null) {
-      future = crypto.generateKeyPair();
+      future = _loadOrGenerate();
       _keyPairFuture = future;
     }
 

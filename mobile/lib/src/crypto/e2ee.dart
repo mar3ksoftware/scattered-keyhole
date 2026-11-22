@@ -48,6 +48,9 @@ class E2eeKeyPair {
   final E2eePublicKey publicKey;
 
   E2eeKeyPair._(this._privateKey, this.publicKey);
+
+  /// Hex-encoded private scalar (Tier-6 durable identity keys).
+  String get privateScalarHex => _privateKey.d!.toRadixString(16);
 }
 
 /// A P-256 public key backed by a point on the curve.
@@ -128,6 +131,20 @@ Future<E2eeKeyPair> generateKeyPair() async {
     throw StateError('Failed to generate a P-256 key pair');
   }
 
+  return E2eeKeyPair._(ECPrivateKey(d, _p256), E2eePublicKey._(point, _p256));
+}
+
+/// Serializes the private scalar of [keyPair] as a hex string (Tier-6 durable
+/// identity keys). The curve is fixed (P-256), so only the scalar is needed.
+String exportPrivateKeyHex(E2eeKeyPair keyPair) => keyPair.privateScalarHex;
+
+/// Rebuilds a key pair from a hex-encoded private scalar.
+Future<E2eeKeyPair> importKeyPairFromHex(String hex) async {
+  final d = BigInt.parse(hex, radix: 16);
+  final point = _p256.G * d;
+  if (point == null || point.isInfinity) {
+    throw StateError('Invalid P-256 scalar');
+  }
   return E2eeKeyPair._(ECPrivateKey(d, _p256), E2eePublicKey._(point, _p256));
 }
 
