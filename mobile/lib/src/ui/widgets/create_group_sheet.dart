@@ -32,6 +32,7 @@ class _CreateGroupSheetState extends State<CreateGroupSheet> {
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _descriptionController = TextEditingController();
   final Set<String> _selected = <String>{};
+  bool _persistent = false;
 
   @override
   void dispose() {
@@ -57,7 +58,7 @@ class _CreateGroupSheetState extends State<CreateGroupSheet> {
   void _submit() {
     final name = _nameController.text.trim();
     if (name.isEmpty || _selected.isEmpty) return;
-    widget.controller.createGroup(name, _selected.toList(growable: false));
+    widget.controller.createGroup(name, _selected.toList(growable: false), persistent: _persistent);
     Navigator.of(context).pop();
   }
 
@@ -150,6 +151,15 @@ class _CreateGroupSheetState extends State<CreateGroupSheet> {
                       hintText: 'Description',
                       counterText: '',
                     ),
+                  ),
+                  const SizedBox(height: 8),
+                  CheckboxListTile(
+                    value: _persistent,
+                    onChanged: (v) => setState(() => _persistent = v ?? false),
+                    title: const Text('Persistent room'),
+                    subtitle: const Text('Messages survive server restart'),
+                    controlAffinity: ListTileControlAffinity.leading,
+                    contentPadding: EdgeInsets.zero,
                   ),
                   const SizedBox(height: 14),
                   const Text(

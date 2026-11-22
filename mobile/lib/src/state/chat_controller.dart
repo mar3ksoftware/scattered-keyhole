@@ -569,8 +569,8 @@ class ChatController extends ChangeNotifier {
   }
 
   /// Sends `group:create`.
-  void createGroup(String name, List<String> members) {
-    _socket.sendGroupCreate(GroupCreatePayload(name: name, members: members));
+  void createGroup(String name, List<String> members, {bool persistent = false}) {
+    _socket.sendGroupCreate(GroupCreatePayload(name: name, members: members, persistent: persistent));
   }
 
   /// Sends `group:update` (metadata). No optimistic apply: the server relays
