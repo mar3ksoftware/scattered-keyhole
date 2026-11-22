@@ -3,6 +3,7 @@
 // Adapted from backend/src/e2ee-session.ts for browser use.
 
 import {
+  deriveEcdhBits,
   deriveSharedKey,
   decrypt as e2eeDecrypt,
   encrypt as e2eeEncrypt,
@@ -22,6 +23,11 @@ export class E2eeSession {
   #sharedKeys: Map<string, CryptoKey>;
   #peerPublicKeys: Map<string, string>;
   #pqKeyPair: { publicKey: Uint8Array; privateKey: Uint8Array } | undefined;
+  #peerPqPublicKeys: Map<string, Uint8Array>;
+  #ecdhBits: Map<string, Uint8Array>;
+  #mlkemOut: Map<string, Uint8Array>;
+  #mlkemIn: Map<string, Uint8Array>;
+  #mlkemCtSenders: Map<string, (ct: Uint8Array) => void>;
 
   constructor() {
     this.#keyPair = undefined;
@@ -29,6 +35,11 @@ export class E2eeSession {
     this.#sharedKeys = new Map();
     this.#peerPublicKeys = new Map();
     this.#pqKeyPair = undefined;
+    this.#peerPqPublicKeys = new Map();
+    this.#ecdhBits = new Map();
+    this.#mlkemOut = new Map();
+    this.#mlkemIn = new Map();
+    this.#mlkemCtSenders = new Map();
   }
 
   // Serialize keypair generation: multiple public-key exchanges can start
@@ -117,9 +128,9 @@ export class E2eeSession {
   }
 
   // Tier-6 PQ: ML-KEM-768 public key for hybrid key exchange.
-  getPqPublicKey(): string {
+  async getPqPublicKey(): Promise<string> {
     if (this.#pqKeyPair === undefined) {
-      this.#pqKeyPair = generatePqKeyPair();
+      this.#pqKeyPair = await generatePqKeyPair();
     }
     return btoa(String.fromCharCode(...this.#pqKeyPair!.publicKey));
   }
@@ -139,9 +150,21 @@ export class E2eeSession {
   async deriveSharedSecret(peerUsername: string, peerPublicKeyBase64: string): Promise<CryptoKey> {
     const keyPair = await this.#getKeyPair();
     const peerKey = await importPublicKey(peerPublicKeyBase64);
+    const ecdhBits = await deriveEcdhBits(keyPair.privateKey, peerKey);
+    this.#ecdhBits.set(peerUsername, new Uint8Array(ecdhBits));
     const sharedKey = await deriveSharedKey(keyPair.privateKey, peerKey);
     this.#sharedKeys.set(peerUsername, sharedKey);
     this.#peerPublicKeys.set(peerUsername, peerPublicKeyBase64);
+    // If peer's ML-KEM pk already known, encapsulate now.
+    const peerPqPk = this.#peerPqPublicKeys.get(peerUsername);
+    if (peerPqPk !== undefined) {
+      const { ciphertext, sharedSecret } = await pqEncapsulate(peerPqPk);
+      this.#mlkemOut.set(peerUsername, sharedSecret);
+      // Send ciphertext via a stored callback if available.
+      const cb = this.#mlkemCtSenders.get(peerUsername);
+      if (cb !== undefined) cb(ciphertext);
+      void this.#tryCombine(peerUsername);
+    }
     return sharedKey;
   }
 
@@ -191,9 +214,73 @@ export class E2eeSession {
   // A peer who rejoins may have generated a new keypair (page reload, logout).
   // Drop the old shared key so sends wait for the fresh key exchange instead
   // of encrypting with a key the peer can no longer decrypt.
+  // Register a callback for sending ML-KEM ciphertext to a peer.
+  registerMlkemCtSender(peerUsername: string, cb: (ct: Uint8Array) => void): void {
+    this.#mlkemCtSenders.set(peerUsername, cb);
+  }
+
+  // Called when peer's ML-KEM public key is received. Encapsulate and send ct.
+  async handlePeerPqPublicKey(peerUsername: string, peerPqPkBase64: string): Promise<void> {
+    const peerPqPk = Uint8Array.from(atob(peerPqPkBase64), (c) => c.charCodeAt(0));
+    this.#peerPqPublicKeys.set(peerUsername, peerPqPk);
+    const { ciphertext, sharedSecret } = await pqEncapsulate(peerPqPk);
+    this.#mlkemOut.set(peerUsername, sharedSecret);
+    const cb = this.#mlkemCtSenders.get(peerUsername);
+    if (cb !== undefined) cb(ciphertext);
+    await this.#tryCombine(peerUsername);
+  }
+
+  // Called when ML-KEM ciphertext is received from peer. Decapsulate and combine.
+  async handleMlkemCiphertext(peerUsername: string, ciphertextBase64: string): Promise<void> {
+    const sk = this.getPqPrivateKey();
+    if (sk === undefined) return;
+    const ct = Uint8Array.from(atob(ciphertextBase64), (c) => c.charCodeAt(0));
+    try {
+      const ss = await pqDecapsulate(sk, ct);
+      this.#mlkemIn.set(peerUsername, ss);
+      await this.#tryCombine(peerUsername);
+    } catch {}
+  }
+
+  async #tryCombine(peerUsername: string): Promise<void> {
+    const ecdhBits = this.#ecdhBits.get(peerUsername);
+    const mlkemOut = this.#mlkemOut.get(peerUsername);
+    const mlkemIn = this.#mlkemIn.get(peerUsername);
+    if (ecdhBits === undefined) return;
+    // Combine available ML-KEM secrets (prefer in, fall back to out).
+    const mlkemSs = mlkemIn ?? mlkemOut;
+    if (mlkemSs === undefined) return;
+    // HKDF(ecdh_bits || mlkem_ss) -> AES-256 key
+    const combined = new Uint8Array(ecdhBits.length + mlkemSs.length);
+    combined.set(ecdhBits, 0);
+    combined.set(mlkemSs, ecdhBits.length);
+    const keyMaterial = await crypto.subtle.importKey('raw', combined, { name: 'HKDF' }, false, [
+      'deriveBits',
+    ]);
+    const bits = await crypto.subtle.deriveBits(
+      {
+        name: 'HKDF',
+        hash: 'SHA-256',
+        salt: new Uint8Array(0),
+        info: new TextEncoder().encode('scattered-keyhole-pq-hybrid-v1'),
+      },
+      keyMaterial,
+      256,
+    );
+    const aesKey = await crypto.subtle.importKey('raw', bits, { name: 'AES-GCM' }, false, [
+      'encrypt',
+      'decrypt',
+    ]);
+    this.#sharedKeys.set(peerUsername, aesKey);
+  }
+
   forgetSharedKey(peerUsername: string): void {
     this.#sharedKeys.delete(peerUsername);
     this.#peerPublicKeys.delete(peerUsername);
+    this.#peerPqPublicKeys.delete(peerUsername);
+    this.#ecdhBits.delete(peerUsername);
+    this.#mlkemOut.delete(peerUsername);
+    this.#mlkemIn.delete(peerUsername);
   }
 
   // Public keys arrive asynchronously after a peer joins/reconnects. Wait a

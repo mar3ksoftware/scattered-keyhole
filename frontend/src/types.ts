@@ -22,6 +22,7 @@ export type EncryptedMessagePayload = {
 export type E2eePublicKeyPayload = {
   readonly to: string;
   readonly publicKey: string;
+  readonly mlkemPublicKey?: string;
 };
 
 export type PrivateMessage = {
@@ -475,6 +476,7 @@ export type E2eePublicKeyRelay = {
   readonly from: string;
   readonly fromUsername: string;
   readonly publicKey: string;
+  readonly mlkemPublicKey?: string;
 };
 
 // ── Constants ──
@@ -505,6 +507,7 @@ export type ClientToServerEvents = {
   'user:login': (payload: LoginPayload) => void;
   'message:send': (payload: EncryptedMessagePayload) => void;
   'e2ee:public_key': (payload: E2eePublicKeyPayload) => void;
+  'e2ee:mlkem_ct': (payload: { readonly to: string; readonly ciphertext: string }) => void;
   'group:create': (payload: {
     readonly name: string;
     readonly members: readonly string[];
@@ -550,6 +553,11 @@ export type ServerToClientEvents = {
   login_success: (payload: LoginResult) => void;
   login_error: (payload: LoginResult) => void;
   'e2ee:public_key': (payload: E2eePublicKeyRelay) => void;
+  'e2ee:mlkem_ct': (payload: {
+    readonly from: string;
+    readonly fromUsername: string;
+    readonly ciphertext: string;
+  }) => void;
   'group:created': (payload: GroupInfo) => void;
   'group:created_error': (payload: { readonly message: string }) => void;
   'group:updated': (payload: GroupUpdatedPayload) => void;
@@ -598,6 +606,7 @@ export const EVENTS = {
     USER_REGISTER: 'user:register',
     USER_LOGIN: 'user:login',
     E2EE_PUBLIC_KEY: 'e2ee:public_key',
+    E2EE_MLKEM_CT: 'e2ee:mlkem_ct',
     GROUP_CREATE: 'group:create',
     GROUP_UPDATE: 'group:update',
     GROUP_MESSAGE_SEND: 'group:message:send',
@@ -638,6 +647,7 @@ export const EVENTS = {
     LOGIN_SUCCESS: 'login_success',
     LOGIN_ERROR: 'login_error',
     E2EE_PUBLIC_KEY: 'e2ee:public_key',
+    E2EE_MLKEM_CT: 'e2ee:mlkem_ct',
     GROUP_CREATED: 'group:created',
     GROUP_CREATED_ERROR: 'group:created_error',
     GROUP_UPDATED: 'group:updated',

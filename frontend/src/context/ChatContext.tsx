@@ -1558,8 +1558,8 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
 
     const sendPublicKeyTo = (to: string) => {
       e2eeRef.current.getPublicKey().then(
-        (publicKey) => {
-          const mlkemPublicKey = e2eeRef.current.getPqPublicKey();
+        async (publicKey) => {
+          const mlkemPublicKey = await e2eeRef.current.getPqPublicKey();
           socket.emit(EVENTS.CLIENT.E2EE_PUBLIC_KEY, { to, publicKey, mlkemPublicKey });
         },
         () => {},
@@ -1789,6 +1789,22 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
 
     socket.on(EVENTS.SERVER.E2EE_PUBLIC_KEY, (data) => {
       e2eeRef.current.deriveSharedSecret(data.fromUsername, data.publicKey).catch(() => {});
+      if (data.mlkemPublicKey !== undefined) {
+        e2eeRef.current.registerMlkemCtSender(data.fromUsername, (ct) => {
+          const b64 = btoa(String.fromCharCode(...ct));
+          socketRef.current.emit(EVENTS.CLIENT.E2EE_MLKEM_CT, {
+            to: data.fromUsername,
+            ciphertext: b64,
+          });
+        });
+        e2eeRef.current
+          .handlePeerPqPublicKey(data.fromUsername, data.mlkemPublicKey)
+          .catch(() => {});
+      }
+    });
+
+    socket.on(EVENTS.SERVER.E2EE_MLKEM_CT, (data: { fromUsername: string; ciphertext: string }) => {
+      e2eeRef.current.handleMlkemCiphertext(data.fromUsername, data.ciphertext).catch(() => {});
     });
 
     socket.on(EVENTS.SERVER.PRIVATE_MESSAGE, (msg) => {
