@@ -59,6 +59,7 @@ class GroupInfo {
     required this.createdAt,
     this.description = '',
     this.disappearing = 0,
+    this.persistent = false,
   });
 
   factory GroupInfo.fromJson(Map<String, dynamic> json) {
@@ -74,6 +75,7 @@ class GroupInfo {
           ? json['description'] as String
           : '',
       disappearing: readInt(json['disappearing']),
+      persistent: json['persistent'] == true,
     );
   }
 
@@ -88,6 +90,9 @@ class GroupInfo {
 
   /// Disappearing-message timer in seconds for the whole group; 0 is off.
   final int disappearing;
+
+  /// Whether messages in this room persist across server restarts (Tier-7).
+  final bool persistent;
 
   List<String> get memberUsernames =>
       members.map((member) => member.username).toList(growable: false);
@@ -107,6 +112,7 @@ class GroupInfo {
     'createdAt': createdAt,
     'description': description,
     'disappearing': disappearing,
+    'persistent': persistent,
   };
 
   GroupInfo copyWith({
@@ -117,6 +123,7 @@ class GroupInfo {
     int? createdAt,
     String? description,
     int? disappearing,
+    bool? persistent,
   }) {
     return GroupInfo(
       groupId: groupId ?? this.groupId,
@@ -126,6 +133,7 @@ class GroupInfo {
       createdAt: createdAt ?? this.createdAt,
       description: description ?? this.description,
       disappearing: disappearing ?? this.disappearing,
+      persistent: persistent ?? this.persistent,
     );
   }
 
@@ -138,6 +146,7 @@ class GroupInfo {
         other.createdAt == createdAt &&
         other.description == description &&
         other.disappearing == disappearing &&
+        other.persistent == persistent &&
         _membersEqual(other.members, members);
   }
 
@@ -157,6 +166,7 @@ class GroupInfo {
     createdAt,
     description,
     disappearing,
+    persistent,
     Object.hashAll(members),
   );
 }

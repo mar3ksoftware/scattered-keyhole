@@ -150,6 +150,8 @@ export type GroupInfo = {
   readonly description: string;
   // Tier-3 C: conversation timer in seconds (0 = off).
   readonly disappearing: number;
+  // Tier-7: whether messages survive server restart.
+  readonly persistent: boolean;
   readonly members: readonly GroupMember[];
   readonly createdBy: string;
   readonly createdAt: number;
@@ -157,9 +159,10 @@ export type GroupInfo = {
 
 // Wire shape tolerated from old servers: the two Tier-3 fields may be
 // absent in JSON and are normalized to '' / 0 before they reach state.
-export type GroupInfoJson = Omit<GroupInfo, 'description' | 'disappearing'> & {
+export type GroupInfoJson = Omit<GroupInfo, 'description' | 'disappearing' | 'persistent'> & {
   readonly description?: string;
   readonly disappearing?: number;
+  readonly persistent?: boolean;
 };
 
 export type GroupEncryptedPayload = {
