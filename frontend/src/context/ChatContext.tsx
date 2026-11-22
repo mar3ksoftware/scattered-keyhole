@@ -50,6 +50,8 @@ type ChatState = {
   readonly directory: readonly string[];
   readonly kickTallies: readonly KickTally[];
   readonly connectionStatus: 'connecting' | 'connected' | 'disconnected';
+  readonly callState: 'idle' | 'calling' | 'incoming' | 'connected';
+  readonly callPeer: string | null;
   readonly error: string | null;
   readonly openConversation: ConversationTarget | null;
   readonly unread: Readonly<Record<string, UnreadEntry>>;
@@ -88,6 +90,8 @@ const initialState: ChatState = {
   polls: {},
   pins: {},
   dmDisappearing: {},
+  callState: 'idle',
+  callPeer: null,
 };
 
 type ChatAction =
@@ -179,6 +183,13 @@ type ChatAction =
       // Full-state apply from group:updated; unknown groups are ignored.
       type: 'UPDATE_GROUP';
       payload: { readonly groupId: string; readonly name: string; readonly description: string };
+    }
+  | {
+      type: 'SET_CALL_STATE';
+      payload: {
+        readonly state: 'idle' | 'calling' | 'incoming' | 'connected';
+        readonly peer: string | null;
+      };
     };
 
 function reducer(state: ChatState, action: ChatAction): ChatState {
@@ -452,6 +463,8 @@ function reducer(state: ChatState, action: ChatAction): ChatState {
     }
     case 'UPDATE_GROUP':
       return { ...state, groups: applyGroupUpdated(state.groups, action.payload) };
+    case 'SET_CALL_STATE':
+      return { ...state, callState: action.payload.state, callPeer: action.payload.peer };
     default:
       return state;
   }
@@ -684,10 +697,16 @@ export type ChatContextValue = {
   readonly addMember: (groupId: string, username: string) => void;
   readonly removeMember: (groupId: string, username: string) => void;
   readonly voteKick: (groupId: string, username: string) => void;
+  readonly startCall: (peerUsername: string) => void;
+  readonly acceptCall: () => void;
+  readonly rejectCall: () => void;
+  readonly endCall: () => void;
   readonly promoteMember: (groupId: string, username: string) => void;
   readonly demoteMember: (groupId: string, username: string) => void;
   readonly redactMessage: (target: ConversationTarget, targetId: string) => void;
   readonly connectionStatus: 'connecting' | 'connected' | 'disconnected';
+  readonly callState: 'idle' | 'calling' | 'incoming' | 'connected';
+  readonly callPeer: string | null;
   readonly error: string | null;
   // ── Tier-1 features ──
   readonly unread: Readonly<Record<string, UnreadEntry>>;
@@ -1226,6 +1245,30 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
 
   const voteKick = useCallback((groupId: string, username: string) => {
     socketRef.current.emit(EVENTS.CLIENT.GROUP_KICK_VOTE, { groupId, username });
+  }, []);
+
+  const startCall = useCallback((peerUsername: string) => {
+    dispatch({ type: 'SET_CALL_STATE', payload: { state: 'calling', peer: peerUsername } });
+    socketRef.current.emit(EVENTS.CLIENT.CALL_OFFER, { to: peerUsername, sdp: '' });
+  }, []);
+
+  const acceptCall = useCallback(() => {
+    const peer = stateRef.current.callPeer;
+    if (peer === null) return;
+    socketRef.current.emit(EVENTS.CLIENT.CALL_ANSWER, { to: peer, sdp: '' });
+    dispatch({ type: 'SET_CALL_STATE', payload: { state: 'connected', peer } });
+  }, []);
+
+  const rejectCall = useCallback(() => {
+    const peer = stateRef.current.callPeer;
+    if (peer !== null) socketRef.current.emit(EVENTS.CLIENT.CALL_REJECT, { to: peer });
+    dispatch({ type: 'SET_CALL_STATE', payload: { state: 'idle', peer: null } });
+  }, []);
+
+  const endCall = useCallback(() => {
+    const peer = stateRef.current.callPeer;
+    if (peer !== null) socketRef.current.emit(EVENTS.CLIENT.CALL_END, { to: peer });
+    dispatch({ type: 'SET_CALL_STATE', payload: { state: 'idle', peer: null } });
   }, []);
 
   const promoteMember = useCallback((groupId: string, username: string) => {
@@ -1939,6 +1982,26 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
       showError(payload.message);
     });
 
+    // ── Tier-8 call signaling ──
+    socket.on(EVENTS.SERVER.CALL_OFFER, (payload) => {
+      dispatch({
+        type: 'SET_CALL_STATE',
+        payload: { state: 'incoming', peer: payload.fromUsername },
+      });
+    });
+    socket.on(EVENTS.SERVER.CALL_ANSWER, () => {
+      dispatch({
+        type: 'SET_CALL_STATE',
+        payload: { state: 'connected', peer: stateRef.current.callPeer },
+      });
+    });
+    socket.on(EVENTS.SERVER.CALL_END, () => {
+      dispatch({ type: 'SET_CALL_STATE', payload: { state: 'idle', peer: null } });
+    });
+    socket.on(EVENTS.SERVER.CALL_REJECT, () => {
+      dispatch({ type: 'SET_CALL_STATE', payload: { state: 'idle', peer: null } });
+    });
+
     socket.connect();
 
     return () => {
@@ -1991,6 +2054,10 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
     promoteMember,
     demoteMember,
     redactMessage,
+    startCall,
+    acceptCall,
+    rejectCall,
+    endCall,
     connectionStatus: state.connectionStatus,
     error: state.error,
     unread: state.unread,
@@ -2011,6 +2078,8 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
     updateProfile,
     pins: state.pins,
     dmDisappearing: state.dmDisappearing,
+    callState: state.callState,
+    callPeer: state.callPeer,
     sendPin,
     getSafetyNumber,
     setDisappearing,

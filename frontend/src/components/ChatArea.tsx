@@ -43,6 +43,12 @@ export function ChatArea({ selectedUser, selectedGroup, onBack, showBack }: Chat
     setDisappearing,
     updateGroup,
     getSafetyNumber,
+    callState,
+    callPeer,
+    startCall,
+    acceptCall,
+    rejectCall,
+    endCall,
   } = useChat();
   const [showMembers, setShowMembers] = useState(false);
   const [editingGroup, setEditingGroup] = useState(false);
@@ -215,7 +221,7 @@ export function ChatArea({ selectedUser, selectedGroup, onBack, showBack }: Chat
         }
       />
       {selectedUser !== null && (
-        <div className="px-4 py-1">
+        <div className="px-4 py-1 flex items-center gap-2">
           <button
             type="button"
             onClick={async () => {
@@ -226,9 +232,39 @@ export function ChatArea({ selectedUser, selectedGroup, onBack, showBack }: Chat
           >
             Verify safety number
           </button>
+          {callState === 'idle' && (
+            <button
+              type="button"
+              onClick={() => startCall(selectedUser)}
+              className="text-xs text-emerald-500 hover:text-emerald-300"
+            >
+              Call
+            </button>
+          )}
+          {callState === 'calling' && <span className="text-xs text-zinc-400">Calling…</span>}
+          {callState === 'connected' && (
+            <button
+              type="button"
+              onClick={endCall}
+              className="text-xs text-rose-400 hover:text-rose-300"
+            >
+              End call
+            </button>
+          )}
           {safetyNumber !== null && (
             <p className="mt-1 text-[10px] font-mono text-zinc-400 break-all">{safetyNumber}</p>
           )}
+        </div>
+      )}
+      {callState === 'incoming' && callPeer !== null && (
+        <div className="px-4 py-2 bg-zinc-900 border-b border-zinc-800 flex items-center gap-2">
+          <span className="text-sm text-zinc-200">Incoming call from {callPeer}</span>
+          <button type="button" onClick={acceptCall} className="text-xs text-emerald-500">
+            Accept
+          </button>
+          <button type="button" onClick={rejectCall} className="text-xs text-rose-400">
+            Reject
+          </button>
         </div>
       )}
       {displayName == null ? (

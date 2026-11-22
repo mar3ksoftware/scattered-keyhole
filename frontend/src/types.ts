@@ -522,6 +522,11 @@ export type ClientToServerEvents = {
   'message:delete': (payload: MessageDeletePayload) => void;
   'message:pin': (payload: MessagePinPayload) => void;
   'disappearing:set': (payload: DisappearingSetPayload) => void;
+  'call:offer': (payload: { readonly to: string; readonly sdp: string }) => void;
+  'call:answer': (payload: { readonly to: string; readonly sdp: string }) => void;
+  'call:ice': (payload: { readonly to: string; readonly candidate: string }) => void;
+  'call:end': (payload: { readonly to: string }) => void;
+  'call:reject': (payload: { readonly to: string }) => void;
   'group:member:promote': (payload: GroupTargetPayload) => void;
   'group:member:demote': (payload: GroupTargetPayload) => void;
   'message:redact': (payload: MessageDeletePayload) => void;
@@ -562,6 +567,23 @@ export type ServerToClientEvents = {
   'message:pinned': (payload: MessagePinnedPayload) => void;
   'disappearing:changed': (payload: DisappearingChangedPayload) => void;
   notice: (payload: NoticePayload) => void;
+  'call:offer': (payload: {
+    readonly from: string;
+    readonly fromUsername: string;
+    readonly sdp: string;
+  }) => void;
+  'call:answer': (payload: {
+    readonly from: string;
+    readonly fromUsername: string;
+    readonly sdp: string;
+  }) => void;
+  'call:ice': (payload: {
+    readonly from: string;
+    readonly fromUsername: string;
+    readonly candidate: string;
+  }) => void;
+  'call:end': (payload: { readonly from: string; readonly fromUsername: string }) => void;
+  'call:reject': (payload: { readonly from: string; readonly fromUsername: string }) => void;
   'poll:voted': (payload: PollVotedPayload) => void;
   'poll:closed': (payload: PollClosedPayload) => void;
   'profile:updated': (payload: ProfileUpdatedPayload) => void;
@@ -589,6 +611,11 @@ export const EVENTS = {
     MESSAGE_DELETE: 'message:delete',
     MESSAGE_PIN: 'message:pin',
     DISAPPEARING_SET: 'disappearing:set',
+    CALL_OFFER: 'call:offer',
+    CALL_ANSWER: 'call:answer',
+    CALL_ICE: 'call:ice',
+    CALL_END: 'call:end',
+    CALL_REJECT: 'call:reject',
     GROUP_MEMBER_PROMOTE: 'group:member:promote',
     GROUP_MEMBER_DEMOTE: 'group:member:demote',
     MESSAGE_REDACT: 'message:redact',
@@ -628,6 +655,11 @@ export const EVENTS = {
     MESSAGE_PINNED: 'message:pinned',
     DISAPPEARING_CHANGED: 'disappearing:changed',
     NOTICE: 'notice',
+    CALL_OFFER: 'call:offer',
+    CALL_ANSWER: 'call:answer',
+    CALL_ICE: 'call:ice',
+    CALL_END: 'call:end',
+    CALL_REJECT: 'call:reject',
     POLL_VOTED: 'poll:voted',
     POLL_CLOSED: 'poll:closed',
     PROFILE_UPDATED: 'profile:updated',
