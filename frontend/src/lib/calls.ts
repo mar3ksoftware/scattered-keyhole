@@ -1,7 +1,4 @@
-// ── WebRTC call signaling helpers (Tier-8) ─────────────────────────────
-// Wraps RTCPeerConnection setup for audio/video calls. The signaling itself
-// travels over Socket.io (call:offer/answer/ice/end/reject); this module
-// owns the peer connection and media streams.
+// ── WebRTC call helpers (Tier-8) ──────────────────────────────────────
 
 export type CallHandlers = {
   readonly onIceCandidate: (candidate: RTCIceCandidate) => void;

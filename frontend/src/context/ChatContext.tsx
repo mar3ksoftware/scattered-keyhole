@@ -8,6 +8,7 @@ import { clearMediaCache, MediaError, prepareAndUpload } from '../lib/media';
 import { mentionsMe } from '../lib/mentions';
 import { createPendingOps } from '../lib/pending-ops';
 import { applyPin, clearPinForMessage, pinTargetState } from '../lib/pins';
+import { addTracks, createPeerConnection, getUserMedia } from '../lib/calls';
 import { validateProfile } from '../lib/profile';
 import { purgeExpired, shouldStoreAtIngestion, startPurgeInterval } from '../lib/purge';
 import { getSocket } from '../lib/socket';
@@ -773,6 +774,12 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState);
   const socketRef = useRef(getSocket());
   const e2eeRef = useRef(new E2eeSession());
+  // ── Tier-8 WebRTC ──
+  const callPcRef = useRef<RTCPeerConnection | null>(null);
+  const callLocalStreamRef = useRef<MediaStream | null>(null);
+  const callRemoteStreamRef = useRef<MediaStream | null>(null);
+  const pendingIceRef = useRef<RTCIceCandidate[]>([]);
+  const pendingOfferSdpRef = useRef<string | null>(null);
   const stateRef = useRef(state);
   const pendingGuestRef = useRef<string | null>(null);
   // Kept in memory only — never persisted to storage.
@@ -1247,27 +1254,106 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
     socketRef.current.emit(EVENTS.CLIENT.GROUP_KICK_VOTE, { groupId, username });
   }, []);
 
-  const startCall = useCallback((peerUsername: string) => {
+  const startCall = useCallback(async (peerUsername: string) => {
     dispatch({ type: 'SET_CALL_STATE', payload: { state: 'calling', peer: peerUsername } });
-    socketRef.current.emit(EVENTS.CLIENT.CALL_OFFER, { to: peerUsername, sdp: '' });
+    try {
+      const stream = await getUserMedia(true, true);
+      callLocalStreamRef.current = stream;
+      const pc = createPeerConnection({
+        onIceCandidate: (c) => {
+          socketRef.current.emit(EVENTS.CLIENT.CALL_ICE, {
+            to: peerUsername,
+            candidate: JSON.stringify(c),
+          });
+        },
+        onTrack: (s) => {
+          callRemoteStreamRef.current = s;
+        },
+        onConnectionStateChange: (st) => {
+          if (st === 'disconnected' || st === 'failed' || st === 'closed') {
+            dispatch({ type: 'SET_CALL_STATE', payload: { state: 'idle', peer: null } });
+          }
+        },
+      });
+      addTracks(pc, stream);
+      callPcRef.current = pc;
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      socketRef.current.emit(EVENTS.CLIENT.CALL_OFFER, { to: peerUsername, sdp: offer.sdp ?? '' });
+    } catch (e) {
+      dispatch({ type: 'SET_CALL_STATE', payload: { state: 'idle', peer: null } });
+    }
   }, []);
 
-  const acceptCall = useCallback(() => {
+  const acceptCall = useCallback(async () => {
     const peer = stateRef.current.callPeer;
     if (peer === null) return;
-    socketRef.current.emit(EVENTS.CLIENT.CALL_ANSWER, { to: peer, sdp: '' });
-    dispatch({ type: 'SET_CALL_STATE', payload: { state: 'connected', peer } });
+    const offerSdp = pendingOfferSdpRef.current;
+    try {
+      const stream = await getUserMedia(true, true);
+      callLocalStreamRef.current = stream;
+      const pc = createPeerConnection({
+        onIceCandidate: (c) => {
+          socketRef.current.emit(EVENTS.CLIENT.CALL_ICE, {
+            to: peer,
+            candidate: JSON.stringify(c),
+          });
+        },
+        onTrack: (s) => {
+          callRemoteStreamRef.current = s;
+        },
+        onConnectionStateChange: (st) => {
+          if (st === 'disconnected' || st === 'failed' || st === 'closed') {
+            dispatch({ type: 'SET_CALL_STATE', payload: { state: 'idle', peer: null } });
+          }
+        },
+      });
+      addTracks(pc, stream);
+      callPcRef.current = pc;
+      if (offerSdp) {
+        await pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: offerSdp }));
+        for (const c of pendingIceRef.current) await pc.addIceCandidate(c);
+        pendingIceRef.current = [];
+      }
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      socketRef.current.emit(EVENTS.CLIENT.CALL_ANSWER, { to: peer, sdp: answer.sdp ?? '' });
+      dispatch({ type: 'SET_CALL_STATE', payload: { state: 'connected', peer } });
+    } catch {
+      dispatch({ type: 'SET_CALL_STATE', payload: { state: 'idle', peer: null } });
+    }
   }, []);
 
   const rejectCall = useCallback(() => {
     const peer = stateRef.current.callPeer;
     if (peer !== null) socketRef.current.emit(EVENTS.CLIENT.CALL_REJECT, { to: peer });
+    if (callPcRef.current !== null) {
+      callPcRef.current.close();
+      callPcRef.current = null;
+    }
+    if (callLocalStreamRef.current !== null) {
+      for (const t of callLocalStreamRef.current.getTracks()) t.stop();
+      callLocalStreamRef.current = null;
+    }
+    pendingOfferSdpRef.current = null;
+    pendingIceRef.current = [];
     dispatch({ type: 'SET_CALL_STATE', payload: { state: 'idle', peer: null } });
   }, []);
 
   const endCall = useCallback(() => {
     const peer = stateRef.current.callPeer;
     if (peer !== null) socketRef.current.emit(EVENTS.CLIENT.CALL_END, { to: peer });
+    if (callPcRef.current !== null) {
+      callPcRef.current.close();
+      callPcRef.current = null;
+    }
+    if (callLocalStreamRef.current !== null) {
+      for (const t of callLocalStreamRef.current.getTracks()) t.stop();
+      callLocalStreamRef.current = null;
+    }
+    callRemoteStreamRef.current = null;
+    pendingOfferSdpRef.current = null;
+    pendingIceRef.current = [];
     dispatch({ type: 'SET_CALL_STATE', payload: { state: 'idle', peer: null } });
   }, []);
 
@@ -1984,21 +2070,64 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
 
     // ── Tier-8 call signaling ──
     socket.on(EVENTS.SERVER.CALL_OFFER, (payload) => {
+      pendingOfferSdpRef.current = payload.sdp;
       dispatch({
         type: 'SET_CALL_STATE',
         payload: { state: 'incoming', peer: payload.fromUsername },
       });
     });
-    socket.on(EVENTS.SERVER.CALL_ANSWER, () => {
+    socket.on(EVENTS.SERVER.CALL_ANSWER, async (payload) => {
+      const pc = callPcRef.current;
+      if (pc !== null && payload.sdp) {
+        try {
+          await pc.setRemoteDescription(
+            new RTCSessionDescription({ type: 'answer', sdp: payload.sdp }),
+          );
+          for (const c of pendingIceRef.current) await pc.addIceCandidate(c);
+          pendingIceRef.current = [];
+        } catch {}
+      }
       dispatch({
         type: 'SET_CALL_STATE',
         payload: { state: 'connected', peer: stateRef.current.callPeer },
       });
     });
+
+    socket.on(EVENTS.SERVER.CALL_ICE, async (payload) => {
+      const pc = callPcRef.current;
+      try {
+        const cand = JSON.parse(payload.candidate) as RTCIceCandidateInit;
+        if (pc !== null && pc.remoteDescription !== null) {
+          await pc.addIceCandidate(new RTCIceCandidate(cand));
+        } else {
+          pendingIceRef.current.push(new RTCIceCandidate(cand));
+        }
+      } catch {}
+    });
     socket.on(EVENTS.SERVER.CALL_END, () => {
+      if (callPcRef.current !== null) {
+        callPcRef.current.close();
+        callPcRef.current = null;
+      }
+      if (callLocalStreamRef.current !== null) {
+        for (const t of callLocalStreamRef.current.getTracks()) t.stop();
+        callLocalStreamRef.current = null;
+      }
+      pendingOfferSdpRef.current = null;
+      pendingIceRef.current = [];
       dispatch({ type: 'SET_CALL_STATE', payload: { state: 'idle', peer: null } });
     });
     socket.on(EVENTS.SERVER.CALL_REJECT, () => {
+      if (callPcRef.current !== null) {
+        callPcRef.current.close();
+        callPcRef.current = null;
+      }
+      if (callLocalStreamRef.current !== null) {
+        for (const t of callLocalStreamRef.current.getTracks()) t.stop();
+        callLocalStreamRef.current = null;
+      }
+      pendingOfferSdpRef.current = null;
+      pendingIceRef.current = [];
       dispatch({ type: 'SET_CALL_STATE', payload: { state: 'idle', peer: null } });
     });
 
