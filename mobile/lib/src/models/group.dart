@@ -173,7 +173,7 @@ class GroupInfo {
 
 /// Outbound `group:create` payload.
 class GroupCreatePayload {
-  const GroupCreatePayload({required this.name, required this.members, this.description = ''});
+  const GroupCreatePayload({required this.name, required this.members, this.description = '', this.persistent = false});
 
   factory GroupCreatePayload.fromJson(Map<String, dynamic> json) {
     return GroupCreatePayload(
@@ -184,6 +184,7 @@ class GroupCreatePayload {
       description: json['description'] is String
           ? json['description'] as String
           : '',
+      persistent: json['persistent'] == true,
     );
   }
 
@@ -193,10 +194,14 @@ class GroupCreatePayload {
   /// Optional description (spec A); omitted from the wire when empty.
   final String description;
 
+  /// Whether messages in this room persist across server restarts (Tier-7).
+  final bool persistent;
+
   Map<String, dynamic> toJson() => <String, dynamic>{
     'name': name,
     'members': members,
     if (description.isNotEmpty) 'description': description,
+    if (persistent) 'persistent': true,
   };
 }
 
