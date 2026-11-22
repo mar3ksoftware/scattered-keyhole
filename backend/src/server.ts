@@ -25,6 +25,11 @@ import type { UserRegistry } from './user-registry';
 import {
   validateDisappearingSetPayload,
   validateE2eePublicKeyPayload,
+  validateCallOfferPayload,
+  validateCallAnswerPayload,
+  validateCallIcePayload,
+  validateCallEndPayload,
+  validateCallRejectPayload,
   validateGroupKickResetPayload,
   validateGroupMemberDemotePayload,
   validateGroupMemberPromotePayload,
@@ -518,6 +523,57 @@ export function createServer(
       };
 
       io.to(String(target.userId)).emit(EVENTS.SERVER.E2EE_PUBLIC_KEY, relay);
+    });
+
+    // ── Tier-8 call signaling (relay only; media is peer-to-peer) ──
+    socket.on(EVENTS.CLIENT.CALL_OFFER, (payload) => {
+      const valResult = validateCallOfferPayload(payload);
+      if (!valResult.success) return;
+      const sender = userRegistry.getUserBySocketId(SocketId(socket.id));
+      if (sender === undefined) return;
+      const target = userRegistry.getUserByUsername(valResult.data.to);
+      if (target === undefined) return;
+      io.to(String(target.userId)).emit(EVENTS.SERVER.CALL_OFFER, { from: sender.userId, fromUsername: sender.username, sdp: valResult.data.sdp });
+    });
+
+    socket.on(EVENTS.CLIENT.CALL_ANSWER, (payload) => {
+      const valResult = validateCallAnswerPayload(payload);
+      if (!valResult.success) return;
+      const sender = userRegistry.getUserBySocketId(SocketId(socket.id));
+      if (sender === undefined) return;
+      const target = userRegistry.getUserByUsername(valResult.data.to);
+      if (target === undefined) return;
+      io.to(String(target.userId)).emit(EVENTS.SERVER.CALL_ANSWER, { from: sender.userId, fromUsername: sender.username, sdp: valResult.data.sdp });
+    });
+
+    socket.on(EVENTS.CLIENT.CALL_ICE, (payload) => {
+      const valResult = validateCallIcePayload(payload);
+      if (!valResult.success) return;
+      const sender = userRegistry.getUserBySocketId(SocketId(socket.id));
+      if (sender === undefined) return;
+      const target = userRegistry.getUserByUsername(valResult.data.to);
+      if (target === undefined) return;
+      io.to(String(target.userId)).emit(EVENTS.SERVER.CALL_ICE, { from: sender.userId, fromUsername: sender.username, candidate: valResult.data.candidate });
+    });
+
+    socket.on(EVENTS.CLIENT.CALL_END, (payload) => {
+      const valResult = validateCallEndPayload(payload);
+      if (!valResult.success) return;
+      const sender = userRegistry.getUserBySocketId(SocketId(socket.id));
+      if (sender === undefined) return;
+      const target = userRegistry.getUserByUsername(valResult.data.to);
+      if (target === undefined) return;
+      io.to(String(target.userId)).emit(EVENTS.SERVER.CALL_END, { from: sender.userId, fromUsername: sender.username });
+    });
+
+    socket.on(EVENTS.CLIENT.CALL_REJECT, (payload) => {
+      const valResult = validateCallRejectPayload(payload);
+      if (!valResult.success) return;
+      const sender = userRegistry.getUserBySocketId(SocketId(socket.id));
+      if (sender === undefined) return;
+      const target = userRegistry.getUserByUsername(valResult.data.to);
+      if (target === undefined) return;
+      io.to(String(target.userId)).emit(EVENTS.SERVER.CALL_REJECT, { from: sender.userId, fromUsername: sender.username });
     });
 
     socket.on(EVENTS.CLIENT.GROUP_CREATE, (payload) => {

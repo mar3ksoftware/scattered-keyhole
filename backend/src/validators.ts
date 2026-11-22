@@ -387,3 +387,25 @@ export function validateGroupKickResetPayload(
 ): ValidationResult<{ readonly groupId: string; readonly username: string }> {
   return validateGroupTargetPayload(input);
 }
+
+// ── Tier-8 call signaling validators ──
+const callTargetSchema = z.strictObject({ to: z.string().min(1).max(CONSTANTS.MAX_USERNAME_LENGTH) });
+
+export function validateCallOfferPayload(input: unknown): ValidationResult<{ readonly to: string; readonly sdp: string }> {
+  const schema = z.strictObject({ to: z.string().min(1).max(CONSTANTS.MAX_USERNAME_LENGTH), sdp: z.string().min(1) });
+  return toValidationResult(schema, input);
+}
+export function validateCallAnswerPayload(input: unknown): ValidationResult<{ readonly to: string; readonly sdp: string }> {
+  const schema = z.strictObject({ to: z.string().min(1).max(CONSTANTS.MAX_USERNAME_LENGTH), sdp: z.string().min(1) });
+  return toValidationResult(schema, input);
+}
+export function validateCallIcePayload(input: unknown): ValidationResult<{ readonly to: string; readonly candidate: string }> {
+  const schema = z.strictObject({ to: z.string().min(1).max(CONSTANTS.MAX_USERNAME_LENGTH), candidate: z.string().min(1) });
+  return toValidationResult(schema, input);
+}
+export function validateCallEndPayload(input: unknown): ValidationResult<{ readonly to: string }> {
+  return toValidationResult(callTargetSchema, input);
+}
+export function validateCallRejectPayload(input: unknown): ValidationResult<{ readonly to: string }> {
+  return toValidationResult(callTargetSchema, input);
+}
