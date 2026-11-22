@@ -30,7 +30,12 @@ export function canCreateGroup(name: string, description: string): boolean {
 // Old servers predate Tier-3 and omit the two fields; normalize on ingress
 // so downstream code can treat them as present.
 export function normalizeGroupInfo(group: GroupInfoJson): GroupInfo {
-  return { ...group, description: group.description ?? '', disappearing: group.disappearing ?? 0, persistent: group.persistent ?? false };
+  return {
+    ...group,
+    description: group.description ?? '',
+    disappearing: group.disappearing ?? 0,
+    persistent: group.persistent ?? false,
+  };
 }
 
 // Full-state apply from `group:updated`: both fields travel together, so a

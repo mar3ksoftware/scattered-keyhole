@@ -659,7 +659,12 @@ export type ChatContextValue = {
   readonly groupMessages: readonly DecryptedGroupMessage[];
   readonly directory: readonly string[];
   readonly kickTallies: readonly KickTally[];
-  readonly createGroup: (name: string, members: readonly string[], description?: string) => void;
+  readonly createGroup: (
+    name: string,
+    members: readonly string[],
+    description?: string,
+    persistent?: boolean,
+  ) => void;
   readonly sendGroupMessage: (
     groupId: string,
     body: string,
@@ -1189,11 +1194,12 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
   );
 
   const createGroup = useCallback(
-    (name: string, members: readonly string[], description?: string) => {
+    (name: string, members: readonly string[], description?: string, persistent?: boolean) => {
       socketRef.current.emit(EVENTS.CLIENT.GROUP_CREATE, {
         name,
         members,
         ...(description !== undefined && description.length > 0 ? { description } : {}),
+        ...(persistent === true ? { persistent: true } : {}),
       });
     },
     [],

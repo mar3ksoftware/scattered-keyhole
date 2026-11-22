@@ -53,8 +53,20 @@ export async function exportKeyPairJwk(keyPair: CryptoKeyPair): Promise<Exported
 }
 
 export async function importKeyPairJwk(exported: ExportedKeyPair): Promise<CryptoKeyPair> {
-  const publicKey = await crypto.subtle.importKey('jwk', exported.publicKey, { name: 'ECDH', namedCurve: 'P-256' }, true, []);
-  const privateKey = await crypto.subtle.importKey('jwk', exported.privateKey, { name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
+  const publicKey = await crypto.subtle.importKey(
+    'jwk',
+    exported.publicKey,
+    { name: 'ECDH', namedCurve: 'P-256' },
+    true,
+    [],
+  );
+  const privateKey = await crypto.subtle.importKey(
+    'jwk',
+    exported.privateKey,
+    { name: 'ECDH', namedCurve: 'P-256' },
+    true,
+    ['deriveBits'],
+  );
   return { publicKey, privateKey };
 }
 

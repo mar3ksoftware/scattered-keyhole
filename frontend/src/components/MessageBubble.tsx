@@ -164,10 +164,7 @@ export function MessageBubble({ message, showSender, onReply }: MessageBubblePro
   const canReply = !isDeleted;
   const canReact = !isDeleted;
   const canRedact =
-    isGroup &&
-    !isOwn &&
-    !isDeleted &&
-    isAdminOf(groups, user?.username ?? null, target);
+    isGroup && !isOwn && !isDeleted && isAdminOf(groups, user?.username ?? null, target);
 
   // Pin entries (spec B): visible only to users who may pin, and only on a
   // live message — the slot's current target gets the unpin label.
