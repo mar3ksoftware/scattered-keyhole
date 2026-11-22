@@ -520,6 +520,7 @@ export function createServer(
         from: sender.userId,
         fromUsername: sender.username,
         publicKey: valResult.data.publicKey,
+        mlkemPublicKey: valResult.data.mlkemPublicKey,
       };
 
       io.to(String(target.userId)).emit(EVENTS.SERVER.E2EE_PUBLIC_KEY, relay);

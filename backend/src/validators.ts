@@ -48,6 +48,7 @@ const loginPayloadSchema = z.strictObject({
 const e2eePublicKeyPayloadSchema = z.strictObject({
   to: z.string().min(1).max(CONSTANTS.MAX_USERNAME_LENGTH),
   publicKey: z.string().min(1).max(CONSTANTS.MAX_PUBLIC_KEY_LENGTH),
+  mlkemPublicKey: z.string().min(1).optional(),
 });
 
 const groupCreatePayloadSchema = z.strictObject({
@@ -267,7 +268,7 @@ export function validateLoginPayload(
 
 export function validateE2eePublicKeyPayload(
   input: unknown,
-): ValidationResult<{ readonly to: string; readonly publicKey: string }> {
+): ValidationResult<{ readonly to: string; readonly publicKey: string; readonly mlkemPublicKey?: string | undefined }> {
   return toValidationResult(e2eePublicKeyPayloadSchema, input);
 }
 
