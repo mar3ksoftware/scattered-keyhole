@@ -79,6 +79,17 @@ export type E2eePublicKeyRelay = {
   readonly mlkemPublicKey?: string | undefined;
 };
 
+export type MlkemCiphertextPayload = {
+  readonly to: string;
+  readonly ciphertext: string;
+};
+
+export type MlkemCiphertextRelay = {
+  readonly from: UserId;
+  readonly fromUsername: string;
+  readonly ciphertext: string;
+};
+
 // ── Tier-8 call signaling payloads ──
 export type CallOfferPayload = { readonly to: string; readonly sdp: string };
 export type CallAnswerPayload = { readonly to: string; readonly sdp: string };
@@ -472,6 +483,7 @@ export const EVENTS = {
     POLL_CLOSE: 'poll:close',
     PROFILE_UPDATE: 'profile:update',
     E2EE_PUBLIC_KEY: 'e2ee:public_key',
+    E2EE_MLKEM_CT: 'e2ee:mlkem_ct',
     CALL_OFFER: 'call:offer',
     CALL_ANSWER: 'call:answer',
     CALL_ICE: 'call:ice',
@@ -497,6 +509,7 @@ export const EVENTS = {
     USER_LEFT: 'user:left',
     PRIVATE_MESSAGE: 'private_message',
     E2EE_PUBLIC_KEY: 'e2ee:public_key',
+    E2EE_MLKEM_CT: 'e2ee:mlkem_ct',
     CALL_OFFER: 'call:offer',
     CALL_ANSWER: 'call:answer',
     CALL_ICE: 'call:ice',
@@ -541,6 +554,7 @@ export type ServerToClientEvents = {
   readonly [EVENTS.SERVER.USER_LEFT]: (payload: UserLeftPayload) => void;
   readonly [EVENTS.SERVER.PRIVATE_MESSAGE]: (message: PrivateMessage) => void;
   readonly [EVENTS.SERVER.E2EE_PUBLIC_KEY]: (relay: E2eePublicKeyRelay) => void;
+  readonly [EVENTS.SERVER.E2EE_MLKEM_CT]: (relay: MlkemCiphertextRelay) => void;
   readonly [EVENTS.SERVER.CALL_OFFER]: (relay: CallOfferRelay) => void;
   readonly [EVENTS.SERVER.CALL_ANSWER]: (relay: CallAnswerRelay) => void;
   readonly [EVENTS.SERVER.CALL_ICE]: (relay: CallIceRelay) => void;
@@ -589,6 +603,7 @@ export type ClientToServerEvents = {
   readonly [EVENTS.CLIENT.USER_JOIN]: (payload: UserJoinPayload) => void;
   readonly [EVENTS.CLIENT.MESSAGE_SEND]: (payload: EncryptedMessagePayload) => void;
   readonly [EVENTS.CLIENT.E2EE_PUBLIC_KEY]: (payload: E2eePublicKeyPayload) => void;
+  readonly [EVENTS.CLIENT.E2EE_MLKEM_CT]: (payload: MlkemCiphertextPayload) => void;
   readonly [EVENTS.CLIENT.CALL_OFFER]: (payload: CallOfferPayload) => void;
   readonly [EVENTS.CLIENT.CALL_ANSWER]: (payload: CallAnswerPayload) => void;
   readonly [EVENTS.CLIENT.CALL_ICE]: (payload: CallIcePayload) => void;
