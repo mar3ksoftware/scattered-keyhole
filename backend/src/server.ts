@@ -25,6 +25,7 @@ import type { UserRegistry } from './user-registry';
 import {
   validateDisappearingSetPayload,
   validateE2eePublicKeyPayload,
+  validateMlkemCiphertextPayload,
   validateCallOfferPayload,
   validateCallAnswerPayload,
   validateCallIcePayload,
@@ -524,6 +525,20 @@ export function createServer(
       };
 
       io.to(String(target.userId)).emit(EVENTS.SERVER.E2EE_PUBLIC_KEY, relay);
+    });
+
+    socket.on(EVENTS.CLIENT.E2EE_MLKEM_CT, (payload) => {
+      const valResult = validateMlkemCiphertextPayload(payload);
+      if (!valResult.success) return;
+      const sender = userRegistry.getUserBySocketId(SocketId(socket.id));
+      if (sender === undefined) return;
+      const target = userRegistry.getUserByUsername(valResult.data.to);
+      if (target === undefined) return;
+      io.to(String(target.userId)).emit(EVENTS.SERVER.E2EE_MLKEM_CT, {
+        from: sender.userId,
+        fromUsername: sender.username,
+        ciphertext: valResult.data.ciphertext,
+      });
     });
 
     // ── Tier-8 call signaling (relay only; media is peer-to-peer) ──

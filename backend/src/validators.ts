@@ -410,3 +410,11 @@ export function validateCallEndPayload(input: unknown): ValidationResult<{ reado
 export function validateCallRejectPayload(input: unknown): ValidationResult<{ readonly to: string }> {
   return toValidationResult(callTargetSchema, input);
 }
+
+export function validateMlkemCiphertextPayload(input: unknown): ValidationResult<{ readonly to: string; readonly ciphertext: string }> {
+  const schema = z.strictObject({
+    to: z.string().min(1).max(CONSTANTS.MAX_USERNAME_LENGTH),
+    ciphertext: z.string().min(1),
+  });
+  return toValidationResult(schema, input);
+}
