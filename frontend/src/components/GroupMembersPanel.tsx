@@ -158,9 +158,7 @@ export function GroupMembersPanel({ group, onClose }: GroupMembersPanelProps) {
             {iAmAdmin &&
               member.userId !== group.createdBy &&
               member.userId !== user?.userId &&
-              (member.isAdmin
-                ? user?.userId === group.createdBy
-                : true) && (
+              (member.isAdmin ? user?.userId === group.createdBy : true) && (
                 <button
                   type="button"
                   onClick={() =>

@@ -17,6 +17,7 @@ export function CreateGroupForm({ onClose }: CreateGroupFormProps) {
   const { directory, users, user, createGroup } = useChat();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [persistent, setPersistent] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const toggleMember = useCallback((username: string) => {
@@ -34,12 +35,18 @@ export function CreateGroupForm({ onClose }: CreateGroupFormProps) {
   const handleSubmit = useCallback(() => {
     const trimmed = name.trim();
     if (!canCreateGroup(name, description) || trimmed.length === 0 || selected.size === 0) return;
-    createGroup(trimmed, Array.from(selected), description.length > 0 ? description : undefined);
+    createGroup(
+      trimmed,
+      Array.from(selected),
+      description.length > 0 ? description : undefined,
+      persistent,
+    );
     setName('');
     setDescription('');
+    setPersistent(false);
     setSelected(new Set());
     onClose();
-  }, [name, description, selected, createGroup, onClose]);
+  }, [name, description, persistent, selected, createGroup, onClose]);
 
   const otherUsers = directory
     .filter((u) => u !== user?.username)
@@ -76,6 +83,15 @@ export function CreateGroupForm({ onClose }: CreateGroupFormProps) {
           rows={2}
           className="w-full resize-none bg-zinc-800/50 border border-zinc-700/50 rounded-lg px-4 py-2.5 text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 mb-4"
         />
+        <label className="flex items-center gap-2 mb-4 text-sm text-zinc-300">
+          <input
+            type="checkbox"
+            checked={persistent}
+            onChange={(e) => setPersistent(e.target.checked)}
+            className="rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500/50"
+          />
+          Persistent room (messages survive server restart)
+        </label>
         <div className="max-h-48 overflow-y-auto mb-4">
           {otherUsers.length === 0 ? (
             <p className="text-sm text-zinc-500">No other users</p>

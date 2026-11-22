@@ -42,14 +42,14 @@ export class E2eeSession {
       });
       const tx = db.transaction('identity', 'readonly');
       const store = tx.objectStore('identity');
-      const record = await new Promise<any>((resolve, reject) => {
+      const record = await new Promise<unknown>((resolve, reject) => {
         const r = store.get('keypair');
         r.onsuccess = () => resolve(r.result);
         r.onerror = () => reject(r.error);
       });
       db.close();
       if (record === undefined) return undefined;
-      return importKeyPairJwk(record as any);
+      return importKeyPairJwk(record as { publicKey: JsonWebKey; privateKey: JsonWebKey });
     } catch {
       return undefined;
     }
