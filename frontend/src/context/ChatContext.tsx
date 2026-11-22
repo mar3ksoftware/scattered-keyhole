@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { createContext, useCallback, useContext, useEffect, useReducer, useRef } from 'react';
+import { addTracks, createPeerConnection, getUserMedia } from '../lib/calls';
 import { conversationKeyFor, conversationKeyOfMessage, relayKeyFor } from '../lib/conversation';
 import { E2eeSession } from '../lib/e2ee-session';
 import { expForTimer, parseEnvelope, wrapPollEnvelope, wrapTextEnvelope } from '../lib/envelope';
@@ -8,7 +9,6 @@ import { clearMediaCache, MediaError, prepareAndUpload } from '../lib/media';
 import { mentionsMe } from '../lib/mentions';
 import { createPendingOps } from '../lib/pending-ops';
 import { applyPin, clearPinForMessage, pinTargetState } from '../lib/pins';
-import { addTracks, createPeerConnection, getUserMedia } from '../lib/calls';
 import { validateProfile } from '../lib/profile';
 import { purgeExpired, shouldStoreAtIngestion, startPurgeInterval } from '../lib/purge';
 import { getSocket } from '../lib/socket';
@@ -1280,7 +1280,7 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       socketRef.current.emit(EVENTS.CLIENT.CALL_OFFER, { to: peerUsername, sdp: offer.sdp ?? '' });
-    } catch (e) {
+    } catch {
       dispatch({ type: 'SET_CALL_STATE', payload: { state: 'idle', peer: null } });
     }
   }, []);

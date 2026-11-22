@@ -142,9 +142,9 @@ export async function decrypt(
 }
 
 // ── Post-quantum (Tier-6): ML-KEM-768 hybrid ──────────────────────────
-import { createMlKem768 } from 'mlkem';
+import { createMlKem768, type MlKemInterface } from 'mlkem';
 
-let mlkemPromise: Promise<any> | undefined;
+let mlkemPromise: Promise<MlKemInterface> | undefined;
 
 async function getMlkem() {
   if (mlkemPromise === undefined) mlkemPromise = createMlKem768();

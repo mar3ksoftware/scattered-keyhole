@@ -129,10 +129,9 @@ export class E2eeSession {
 
   // Tier-6 PQ: ML-KEM-768 public key for hybrid key exchange.
   async getPqPublicKey(): Promise<string> {
-    if (this.#pqKeyPair === undefined) {
-      this.#pqKeyPair = await generatePqKeyPair();
-    }
-    return btoa(String.fromCharCode(...this.#pqKeyPair!.publicKey));
+    const pair = this.#pqKeyPair ?? (await generatePqKeyPair());
+    this.#pqKeyPair = pair;
+    return btoa(String.fromCharCode(...pair.publicKey));
   }
 
   getPqPrivateKey(): Uint8Array | undefined {
