@@ -19,6 +19,7 @@ import 'package:scattered_keyhole/src/ui/widgets/message_bubble.dart';
 import 'package:scattered_keyhole/src/ui/widgets/message_composer.dart';
 import 'package:scattered_keyhole/src/ui/widgets/poll_bubble.dart';
 import 'package:scattered_keyhole/src/utils/envelope.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'ui_test_support.dart';
 
@@ -92,6 +93,13 @@ class FakeVoiceEngine implements VoiceRecorderEngine {
 }
 
 void main() {
+  // E2eeSession persists its identity key via shared_preferences; widget tests
+  // run in a fake-async zone where the real plugin channel would never reply,
+  // so back it with the in-memory store.
+  setUp(() {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+  });
+
   // 1×1 red RGBA PNG, the smallest valid image the decoder accepts.
   final Uint8List pngBytes = base64Decode(
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==',

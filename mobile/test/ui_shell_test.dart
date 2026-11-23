@@ -144,8 +144,8 @@ void main() {
 
     expect(find.text('MEMBERS'), findsOneWidget);
     await tester.enterText(find.byType(TextField).first, 'Team');
-    await tester.tap(find.byType(Checkbox).first);
-    await tester.tap(find.byType(Checkbox).last);
+    await tester.tap(find.byKey(const ValueKey('member-checkbox-alice')));
+    await tester.tap(find.byKey(const ValueKey('member-checkbox-bob')));
     await tester.pump();
     await tester.tap(find.widgetWithText(ElevatedButton, 'Create'));
     await tester.pumpAndSettle();
