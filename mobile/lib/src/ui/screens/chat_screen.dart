@@ -12,6 +12,7 @@ import '../../state/voice_recorder.dart';
 import '../../utils/conversation_keys.dart';
 import '../../utils/envelope.dart';
 import '../theme/app_theme.dart';
+import '../widgets/call_overlay.dart';
 import '../widgets/connection_status.dart';
 import '../widgets/conversation_settings_sheet.dart';
 import '../widgets/edit_group_modal.dart';
@@ -348,167 +349,214 @@ class _ChatScreenState extends State<ChatScreen> {
         }
         final reply = _reply;
         final editing = _editing;
-        return SafeArea(
-          child: Column(
-            children: [
-              _ChatHeader(
-                title: title,
-                subtitle: subtitle,
-                status: _controller.connectionStatus,
-                showBack: widget.showBack,
-                showStatusLabel: !widget.showBack,
-                onMembers: group == null
-                    ? null
-                    : () => showGroupMembersSheet(
-                        context,
-                        controller: _controller,
-                        groupId: group.groupId,
-                      ),
-                onSettings: target == null
-                    ? null
-                    : () async {
-                        final seconds = await showConversationSettingsSheet(
+        final callState = _controller.callState;
+        final callPeer = _controller.callPeer;
+        final callActive =
+            callState == CallState.calling || callState == CallState.connected;
+        return PopScope(
+          // System back hangs up first: leaving the screen mid-call would
+          // otherwise strand the peer with a dead connection.
+          canPop: !callActive,
+          onPopInvokedWithResult: (didPop, _) {
+            if (!didPop && callActive) _controller.endCall();
+          },
+          child: SafeArea(
+            child: Column(
+              children: [
+                _ChatHeader(
+                  title: title,
+                  subtitle: subtitle,
+                  status: _controller.connectionStatus,
+                  showBack: widget.showBack,
+                  showStatusLabel: !widget.showBack,
+                  onMembers: group == null
+                      ? null
+                      : () => showGroupMembersSheet(
                           context,
-                          timerSeconds: _controller.timerSecondsFor(target),
-                          disabled: target.isGroup
-                              ? !(group?.isAdmin(_controller.me?.username) ??
-                                  false)
-                              : false,
-                          canEditGroup: target.isGroup &&
-                              (group?.isAdmin(_controller.me?.username) ??
-                                  false),
-                          onEditGroup: target.isGroup && group != null
-                              ? () => showEditGroupModal(
-                                    context,
-                                    group: group,
-                                    onSave: (name, description) =>
-                                        _controller.updateGroup(
-                                      group.groupId,
-                                      name,
-                                      description,
-                                    ),
-                                  )
-                              : null,
-                        );
-                        if (seconds != null && context.mounted) {
-                          final k = conversationKeyFor(target);
-                          _controller.setDisappearing(k, seconds);
-                        }
-                      },
-                onLogout: () {
-                  _controller.logout();
-                  // On phones the chat sits on top of the list; drop it so
-                  // the auth screen underneath is visible right away.
-                  if (widget.showBack && Navigator.canPop(context)) {
-                    Navigator.pop(context);
-                  }
-                },
-              ),
-              if (pinnedView != null)
-                PinBanner(
-                  excerpt: replyExcerptFor(
-                    pinnedView.body ?? pinnedView.text,
-                    mediaName: pinnedView.media?.name,
-                    poll: pinnedView.poll,
-                  ),
-                  canUnpin: canPin,
-                  onUnpin: () {
-                    if (conversationKey != null && pinnedId != null) {
-                      _controller.sendPin(conversationKey, pinnedId, false);
+                          controller: _controller,
+                          groupId: group.groupId,
+                        ),
+                  onSettings: target == null
+                      ? null
+                      : () async {
+                          final seconds = await showConversationSettingsSheet(
+                            context,
+                            timerSeconds: _controller.timerSecondsFor(target),
+                            disabled: target.isGroup
+                                ? !(group?.isAdmin(_controller.me?.username) ??
+                                    false)
+                                : false,
+                            canEditGroup: target.isGroup &&
+                                (group?.isAdmin(_controller.me?.username) ??
+                                    false),
+                            onEditGroup: target.isGroup && group != null
+                                ? () => showEditGroupModal(
+                                      context,
+                                      group: group,
+                                      onSave: (name, description) =>
+                                          _controller.updateGroup(
+                                        group.groupId,
+                                        name,
+                                        description,
+                                      ),
+                                    )
+                                : null,
+                          );
+                          if (seconds != null && context.mounted) {
+                            final k = conversationKeyFor(target);
+                            _controller.setDisappearing(k, seconds);
+                          }
+                        },
+                  onLogout: () {
+                    _controller.logout();
+                    // On phones the chat sits on top of the list; drop it so
+                    // the auth screen underneath is visible right away.
+                    if (widget.showBack && Navigator.canPop(context)) {
+                      Navigator.pop(context);
                     }
                   },
+                  onCall: peer != null && callState == CallState.idle
+                      ? () => _controller.startCall(peer)
+                      : null,
+                  callLabel: switch (callState) {
+                    CallState.calling => 'Calling…',
+                    CallState.connected => 'In call',
+                    _ => null,
+                  },
                 ),
-              if (peer != null)
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                  child: TextButton(
-                    onPressed: () async {
-                      final sn = await _controller.safetyNumberFor(peer);
-                      if (!mounted || sn == null) return;
-                      setState(() => _safetyNumber = sn);
-                    },
-                    child: const Text('Verify safety number'),
+                if (callState == CallState.incoming && callPeer != null)
+                  IncomingCallBanner(
+                    peerName: _controller.displayNameOf(callPeer),
+                    onAccept: _controller.acceptCall,
+                    onReject: _controller.rejectCall,
                   ),
-                ),
-              if (peer != null && _safetyNumber != null)
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                  child: AlertDialog(
-                    title: const Text('Safety number'),
-                    content: Text(_safetyNumber!),
-                    actions: [
-                      TextButton(
-                        onPressed: () => setState(() => _safetyNumber = null),
-                        child: const Text('OK'),
+                Expanded(
+                  child: Stack(
+                    children: [
+                      Column(
+                        children: [
+                          if (pinnedView != null)
+                            PinBanner(
+                              excerpt: replyExcerptFor(
+                                pinnedView.body ?? pinnedView.text,
+                                mediaName: pinnedView.media?.name,
+                                poll: pinnedView.poll,
+                              ),
+                              canUnpin: canPin,
+                              onUnpin: () {
+                                if (conversationKey != null && pinnedId != null) {
+                                  _controller.sendPin(conversationKey, pinnedId, false);
+                                }
+                              },
+                            ),
+                          if (peer != null)
+                            Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                              child: TextButton(
+                                onPressed: () async {
+                                  final sn = await _controller.safetyNumberFor(peer);
+                                  if (!mounted || sn == null) return;
+                                  setState(() => _safetyNumber = sn);
+                                },
+                                child: const Text('Verify safety number'),
+                              ),
+                            ),
+                          if (peer != null && _safetyNumber != null)
+                            Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                              child: AlertDialog(
+                                title: const Text('Safety number'),
+                                content: Text(_safetyNumber!),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () => setState(() => _safetyNumber = null),
+                                    child: const Text('OK'),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          Expanded(
+                            child: MessageList(
+                              messages: messages,
+                              controller: _controller,
+                              target: target,
+                              showReadTicks: peer != null,
+                              readUpTo:
+                                  peer != null ? _controller.readUpToFor(peer) : 0,
+                              onReply: _startReply,
+                              onEdit: _startEdit,
+                              onPin: (view) {
+                                final id = view.id;
+                                if (id == null || conversationKey == null) return;
+                                _controller.sendPin(conversationKey, id, true);
+                              },
+                              onUnpin: (view) {
+                                final id = view.id;
+                                if (id == null || conversationKey == null) return;
+                                _controller.sendPin(conversationKey, id, false);
+                              },
+                              canPin: canPin,
+                              pinnedMessageId: pinnedId,
+                            ),
+                          ),
+                          if (typingLabel != null)
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: Padding(
+                                padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+                                child: Text(
+                                  key: const Key('typing-line'),
+                                  typingLabel,
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    fontStyle: FontStyle.italic,
+                                    color: AppColors.textMuted,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          MessageComposer(
+                            enabled:
+                                _controller.connectionStatus == ConnectionStatus.connected,
+                            onSend: _send,
+                            onAttach: _attach,
+                            onSendPoll: _sendPoll,
+                            voiceRecorder: _voice,
+                            replyAuthor: reply == null
+                                ? null
+                                : _controller.displayNameOf(reply.author ?? ''),
+                            replyExcerpt: reply == null
+                                ? null
+                                : replyExcerptFor(
+                                    reply.body ?? reply.text,
+                                    mediaName: reply.media?.name,
+                                    poll: reply.poll,
+                                  ),
+                            onCancelReply: () => setState(() => _reply = null),
+                            editingBody: editing?.body ?? editing?.text,
+                            onCancelEdit: () => setState(() => _editing = null),
+                            onTyping: _handleTyping,
+                            onStopTyping: _controller.stopTyping,
+                            mentionCandidates: _mentionCandidates(),
+                          ),
+                        ],
                       ),
+                      if (callActive)
+                        Positioned.fill(
+                          child: CallOverlay(
+                            state: callState,
+                            peerName: callPeer == null
+                                ? ''
+                                : _controller.displayNameOf(callPeer),
+                            transport: _controller.callTransport,
+                            onEnd: _controller.endCall,
+                          ),
+                        ),
                     ],
                   ),
                 ),
-              Expanded(
-                child: MessageList(
-                  messages: messages,
-                  controller: _controller,
-                  target: target,
-                  showReadTicks: peer != null,
-                  readUpTo:
-                      peer != null ? _controller.readUpToFor(peer) : 0,
-                  onReply: _startReply,
-                  onEdit: _startEdit,
-                  onPin: (view) {
-                    final id = view.id;
-                    if (id == null || conversationKey == null) return;
-                    _controller.sendPin(conversationKey, id, true);
-                  },
-                  onUnpin: (view) {
-                    final id = view.id;
-                    if (id == null || conversationKey == null) return;
-                    _controller.sendPin(conversationKey, id, false);
-                  },
-                  canPin: canPin,
-                  pinnedMessageId: pinnedId,
-                ),
-              ),
-              if (typingLabel != null)
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
-                    child: Text(
-                      key: const Key('typing-line'),
-                      typingLabel,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontStyle: FontStyle.italic,
-                        color: AppColors.textMuted,
-                      ),
-                    ),
-                  ),
-                ),
-              MessageComposer(
-                enabled:
-                    _controller.connectionStatus == ConnectionStatus.connected,
-                onSend: _send,
-                onAttach: _attach,
-                onSendPoll: _sendPoll,
-                voiceRecorder: _voice,
-                replyAuthor: reply == null
-                    ? null
-                    : _controller.displayNameOf(reply.author ?? ''),
-                replyExcerpt: reply == null
-                    ? null
-                    : replyExcerptFor(
-                        reply.body ?? reply.text,
-                        mediaName: reply.media?.name,
-                        poll: reply.poll,
-                      ),
-                onCancelReply: () => setState(() => _reply = null),
-                editingBody: editing?.body ?? editing?.text,
-                onCancelEdit: () => setState(() => _editing = null),
-                onTyping: _handleTyping,
-                onStopTyping: _controller.stopTyping,
-                mentionCandidates: _mentionCandidates(),
-              ),
-            ],
+              ],
+            ),
           ),
         );
       },
@@ -526,6 +574,8 @@ class _ChatHeader extends StatelessWidget {
     this.subtitle,
     this.onMembers,
     this.onSettings,
+    this.onCall,
+    this.callLabel,
   });
 
   final String title;
@@ -536,6 +586,13 @@ class _ChatHeader extends StatelessWidget {
   final VoidCallback onLogout;
   final VoidCallback? onMembers;
   final VoidCallback? onSettings;
+
+  /// Dials the open DM; null outside a DM or while a call is already up.
+  final VoidCallback? onCall;
+
+  /// Compact call status ("Calling…", "In call") that replaces the call
+  /// button once signaling has started.
+  final String? callLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -590,6 +647,29 @@ class _ChatHeader extends StatelessWidget {
                 ],
               ),
             ),
+            if (callLabel != null)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: Text(
+                  callLabel!,
+                  key: const Key('call-status-label'),
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              )
+            else if (onCall != null)
+              IconButton(
+                key: const Key('start-call'),
+                tooltip: 'Start call',
+                onPressed: onCall,
+                icon: const Icon(
+                  Icons.call_outlined,
+                  size: 22,
+                  color: AppColors.textSecondary,
+                ),
+              ),
             if (onMembers != null)
               IconButton(
                 tooltip: 'Members',
