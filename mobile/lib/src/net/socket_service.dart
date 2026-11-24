@@ -114,6 +114,21 @@ abstract interface class SocketService {
   void sendRedact(MessageDeletePayload payload);
   void sendKickReset(GroupTargetPayload payload);
 
+  /// `call:offer` — start a 1:1 call with [CallOfferPayload.to].
+  void sendCallOffer(CallOfferPayload payload);
+
+  /// `call:answer` — accept a call and hand back our SDP answer.
+  void sendCallAnswer(CallAnswerPayload payload);
+
+  /// `call:ice` — relay one ICE candidate to the call peer.
+  void sendCallIce(CallIcePayload payload);
+
+  /// `call:end` — hang up an active call.
+  void sendCallEnd(CallEndPayload payload);
+
+  /// `call:reject` — decline an incoming call.
+  void sendCallReject(CallEndPayload payload);
+
   // ── Inbound: server -> client ──────────────────────────────────────────
 
   /// `user:joined` — a user (possibly us) joined; broadcast to everyone.
@@ -217,6 +232,21 @@ abstract interface class SocketService {
 
   /// `notice` — direct notice to the affected user (Tier-4).
   Unsubscribe onNotice(void Function(NoticePayload payload) handler);
+
+  /// `call:offer` — someone is calling us; carries the remote SDP offer.
+  Unsubscribe onCallOffer(void Function(CallOfferRelay relay) handler);
+
+  /// `call:answer` — the callee accepted; carries the remote SDP answer.
+  Unsubscribe onCallAnswer(void Function(CallAnswerRelay relay) handler);
+
+  /// `call:ice` — one ICE candidate from the call peer.
+  Unsubscribe onCallIce(void Function(CallIceRelay relay) handler);
+
+  /// `call:end` — the peer hung up.
+  Unsubscribe onCallEnd(void Function(CallEndRelay relay) handler);
+
+  /// `call:reject` — the peer declined our call.
+  Unsubscribe onCallReject(void Function(CallEndRelay relay) handler);
 
   // ── Connection lifecycle listeners ─────────────────────────────────────
 
@@ -396,6 +426,31 @@ class IoSocketService implements SocketService {
   @override
   void sendKickReset(GroupTargetPayload payload) {
     _socket.emit(ChatEvents.groupKickReset, payload.toJson());
+  }
+
+  @override
+  void sendCallOffer(CallOfferPayload payload) {
+    _socket.emit(ChatEvents.callOffer, payload.toJson());
+  }
+
+  @override
+  void sendCallAnswer(CallAnswerPayload payload) {
+    _socket.emit(ChatEvents.callAnswer, payload.toJson());
+  }
+
+  @override
+  void sendCallIce(CallIcePayload payload) {
+    _socket.emit(ChatEvents.callIce, payload.toJson());
+  }
+
+  @override
+  void sendCallEnd(CallEndPayload payload) {
+    _socket.emit(ChatEvents.callEnd, payload.toJson());
+  }
+
+  @override
+  void sendCallReject(CallEndPayload payload) {
+    _socket.emit(ChatEvents.callReject, payload.toJson());
   }
 
   // ── Inbound ────────────────────────────────────────────────────────────
@@ -637,6 +692,41 @@ class IoSocketService implements SocketService {
   Unsubscribe onNotice(void Function(NoticePayload payload) handler) {
     return _on(ChatEvents.notice, (data) {
       handler(NoticePayload.fromJson(asJsonMap(data)));
+    });
+  }
+
+  @override
+  Unsubscribe onCallOffer(void Function(CallOfferRelay relay) handler) {
+    return _on(ChatEvents.callOffer, (data) {
+      handler(CallOfferRelay.fromJson(asJsonMap(data)));
+    });
+  }
+
+  @override
+  Unsubscribe onCallAnswer(void Function(CallAnswerRelay relay) handler) {
+    return _on(ChatEvents.callAnswer, (data) {
+      handler(CallAnswerRelay.fromJson(asJsonMap(data)));
+    });
+  }
+
+  @override
+  Unsubscribe onCallIce(void Function(CallIceRelay relay) handler) {
+    return _on(ChatEvents.callIce, (data) {
+      handler(CallIceRelay.fromJson(asJsonMap(data)));
+    });
+  }
+
+  @override
+  Unsubscribe onCallEnd(void Function(CallEndRelay relay) handler) {
+    return _on(ChatEvents.callEnd, (data) {
+      handler(CallEndRelay.fromJson(asJsonMap(data)));
+    });
+  }
+
+  @override
+  Unsubscribe onCallReject(void Function(CallEndRelay relay) handler) {
+    return _on(ChatEvents.callReject, (data) {
+      handler(CallEndRelay.fromJson(asJsonMap(data)));
     });
   }
 
