@@ -153,13 +153,19 @@ class _CreateGroupSheetState extends State<CreateGroupSheet> {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  CheckboxListTile(
-                    value: _persistent,
-                    onChanged: (v) => setState(() => _persistent = v ?? false),
-                    title: const Text('Persistent room'),
-                    subtitle: const Text('Messages survive server restart'),
-                    controlAffinity: ListTileControlAffinity.leading,
-                    contentPadding: EdgeInsets.zero,
+                  // Own Material so the ListTile paints its ink on a surface,
+                  // not on the sheet's background DecoratedBox.
+                  Material(
+                    type: MaterialType.transparency,
+                    child: CheckboxListTile(
+                      key: const Key('persistent-toggle'),
+                      value: _persistent,
+                      onChanged: (v) => setState(() => _persistent = v ?? false),
+                      title: const Text('Persistent room'),
+                      subtitle: const Text('Messages survive server restart'),
+                      controlAffinity: ListTileControlAffinity.leading,
+                      contentPadding: EdgeInsets.zero,
+                    ),
                   ),
                   const SizedBox(height: 14),
                   const Text(
@@ -263,6 +269,7 @@ class _MemberTile extends StatelessWidget {
               width: 44,
               height: 44,
               child: Checkbox(
+                key: ValueKey('member-checkbox-$username'),
                 value: selected,
                 onChanged: (_) => onChanged(),
                 materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
