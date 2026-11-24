@@ -52,6 +52,10 @@ abstract interface class SocketService {
   /// `e2ee:public_key` — share our public key with [E2eePublicKeyPayload.to].
   void sendE2eePublicKey(E2eePublicKeyPayload payload);
 
+  /// `e2ee:mlkem_ct` — send a protocol-v1 ML-KEM ciphertext to
+  /// [E2eeMlkemCtPayload.to].
+  void sendE2eeMlkemCt(E2eeMlkemCtPayload payload);
+
   /// `user:register` — create an account.
   void sendRegister(RegisterPayload payload);
 
@@ -129,6 +133,9 @@ abstract interface class SocketService {
 
   /// `e2ee:public_key` — relayed public key from another user.
   Unsubscribe onE2eePublicKey(void Function(E2eePublicKeyRelay relay) handler);
+
+  /// `e2ee:mlkem_ct` — relayed protocol-v1 ML-KEM ciphertext from another user.
+  Unsubscribe onE2eeMlkemCt(void Function(E2eeMlkemCtRelay relay) handler);
 
   /// `delivery_failed` — a private message could not be delivered.
   Unsubscribe onDeliveryFailed(void Function(DeliveryFailedPayload payload) handler);
@@ -274,6 +281,11 @@ class IoSocketService implements SocketService {
   @override
   void sendE2eePublicKey(E2eePublicKeyPayload payload) {
     _socket.emit(ChatEvents.e2eePublicKey, payload.toJson());
+  }
+
+  @override
+  void sendE2eeMlkemCt(E2eeMlkemCtPayload payload) {
+    _socket.emit(ChatEvents.e2eeMlkemCt, payload.toJson());
   }
 
   @override
@@ -427,6 +439,13 @@ class IoSocketService implements SocketService {
   Unsubscribe onE2eePublicKey(void Function(E2eePublicKeyRelay relay) handler) {
     return _on(ChatEvents.e2eePublicKey, (payload) {
       handler(E2eePublicKeyRelay.fromJson(asJsonMap(payload)));
+    });
+  }
+
+  @override
+  Unsubscribe onE2eeMlkemCt(void Function(E2eeMlkemCtRelay relay) handler) {
+    return _on(ChatEvents.e2eeMlkemCt, (payload) {
+      handler(E2eeMlkemCtRelay.fromJson(asJsonMap(payload)));
     });
   }
 

@@ -189,4 +189,94 @@ void main() {
       expect(keys.toSet(), hasLength(1));
     });
   });
+
+  group('protocol v1 PQ hybrid', () {
+    test('both sides derive the same hybrid key and interoperate', () async {
+      final alice = E2eeSession()..setOwnUsername('alice');
+      final bob = E2eeSession()..setOwnUsername('bob');
+
+      final alicePublic = await alice.getPublicKey();
+      final bobPublic = await bob.getPublicKey();
+      final alicePq = await alice.getPqPublicKey();
+      final bobPq = await bob.getPqPublicKey();
+
+      await alice.deriveSharedSecret('bob', bobPublic);
+      await bob.deriveSharedSecret('alice', alicePublic);
+
+      // Alice has the lower username, so only she encapsulates. The sender is
+      // registered *after* encapsulation to exercise the buffered flush.
+      Uint8List? aliceCt;
+      await alice.handlePeerPqPublicKey('bob', bobPq);
+      alice.registerMlkemCtSender('bob', (ct) => aliceCt = ct);
+      expect(aliceCt, isNotNull);
+      expect(alice.hasHybridKey('bob'), isTrue);
+
+      // Bob stores Alice's key but must not encapsulate back.
+      Uint8List? bobCt;
+      await bob.handlePeerPqPublicKey('alice', alicePq);
+      bob.registerMlkemCtSender('alice', (ct) => bobCt = ct);
+      expect(bobCt, isNull);
+
+      await bob.handleMlkemCiphertext('alice', base64Encode(aliceCt!));
+      expect(bob.hasHybridKey('alice'), isTrue);
+
+      final toBob = await alice.encrypt('bob', 'pq hello');
+      expect(
+        await bob.decrypt('alice', toBob.ciphertext, toBob.iv),
+        'pq hello',
+      );
+
+      final toAlice = await bob.encrypt('alice', 'pq reply');
+      expect(
+        await alice.decrypt('bob', toAlice.ciphertext, toAlice.iv),
+        'pq reply',
+      );
+    });
+
+    test('ECDH-only ciphertext still decrypts after the hybrid key exists',
+        () async {
+      final alice = E2eeSession()..setOwnUsername('alice');
+      final bob = E2eeSession()..setOwnUsername('bob');
+
+      final alicePublic = await alice.getPublicKey();
+      final bobPublic = await bob.getPublicKey();
+      final alicePq = await alice.getPqPublicKey();
+      final bobPq = await bob.getPqPublicKey();
+
+      await alice.deriveSharedSecret('bob', bobPublic);
+      await bob.deriveSharedSecret('alice', alicePublic);
+
+      // Encrypted with the ECDH-only key, before any ML-KEM material exists.
+      final legacy = await alice.encrypt('bob', 'before pq');
+
+      Uint8List? ct;
+      alice.registerMlkemCtSender('bob', (value) => ct = value);
+      await alice.handlePeerPqPublicKey('bob', bobPq);
+      await bob.handlePeerPqPublicKey('alice', alicePq);
+      await bob.handleMlkemCiphertext('alice', base64Encode(ct!));
+      expect(bob.hasHybridKey('alice'), isTrue);
+
+      // Hybrid now preferred for new sends, but the old ciphertext falls back
+      // to the ECDH-only key.
+      final hybrid = await alice.encrypt('bob', 'after pq');
+      expect(
+        await bob.decrypt('alice', legacy.ciphertext, legacy.iv),
+        'before pq',
+      );
+      expect(
+        await bob.decrypt('alice', hybrid.ciphertext, hybrid.iv),
+        'after pq',
+      );
+    });
+
+    test('ciphertext arriving before the keypair is buffered and retried',
+        () async {
+      final bob = E2eeSession()..setOwnUsername('bob');
+      // A ciphertext that cannot actually decrypt is still buffered without
+      // throwing, and is processed once the keypair exists.
+      await bob.handleMlkemCiphertext('alice', base64Encode(Uint8List(1088)));
+      await bob.getPqPublicKey();
+      expect(bob.hasHybridKey('alice'), isFalse);
+    });
+  });
 }

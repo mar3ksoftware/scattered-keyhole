@@ -7,6 +7,7 @@ abstract final class ChatEvents {
   static const userJoin = 'user:join';
   static const messageSend = 'message:send';
   static const e2eePublicKey = 'e2ee:public_key';
+  static const e2eeMlkemCt = 'e2ee:mlkem_ct';
   static const userRegister = 'user:register';
   static const userLogin = 'user:login';
   static const groupCreate = 'group:create';
