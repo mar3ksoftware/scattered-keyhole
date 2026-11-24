@@ -27,9 +27,18 @@ import 'package:pointycastle/key_derivators/hkdf.dart';
 /// interoperability with every existing client.
 const String e2eeHkdfInfo = 'scattered-keyhole-e2ee-v1';
 
+/// Tier-6 PQ hybrid `info` string, shared with the web client
+/// (`frontend/src/lib/e2ee-session.ts`, protocol v1).
+const String pqHybridHkdfInfo = 'scattered-keyhole-pq-hybrid-v1';
+
 /// UTF-8 bytes of [e2eeHkdfInfo].
 final List<int> e2eeHkdfInfoBytes = List<int>.unmodifiable(
   utf8.encode(e2eeHkdfInfo),
+);
+
+/// UTF-8 bytes of [pqHybridHkdfInfo].
+final List<int> pqHybridHkdfInfoBytes = List<int>.unmodifiable(
+  utf8.encode(pqHybridHkdfInfo),
 );
 
 /// NIST P-256 domain parameters (also known as secp256r1 / prime256v1).
@@ -175,8 +184,9 @@ Future<E2eePublicKey> importPublicKey(String base64Key) async {
 
 // ── Shared key derivation (ECDH → HKDF → AES-GCM) ──────────────────────
 
-/// Derives the AES-GCM key shared with [peerPublicKey].
-Future<SharedKey> deriveSharedKey(
+/// The raw ECDH P-256 shared secret: the fixed-width 32-byte x coordinate
+/// (protocol v1 uses it as the first half of the PQ hybrid input material).
+Future<Uint8List> deriveEcdhBits(
   E2eeKeyPair privateKey,
   E2eePublicKey peerPublicKey,
 ) async {
@@ -184,9 +194,15 @@ Future<SharedKey> deriveSharedKey(
   final x = agreement.calculateAgreement(
     ECPublicKey(peerPublicKey._point, peerPublicKey._parameters),
   );
+  return _bigIntToFixedBytes(x, 32);
+}
 
-  // WebCrypto's deriveBits(256) returns the fixed-width 32-byte x coordinate.
-  final sharedSecret = _bigIntToFixedBytes(x, 32);
+/// Derives the AES-GCM key shared with [peerPublicKey].
+Future<SharedKey> deriveSharedKey(
+  E2eeKeyPair privateKey,
+  E2eePublicKey peerPublicKey,
+) async {
+  final sharedSecret = await deriveEcdhBits(privateKey, peerPublicKey);
   return hkdfSha256(inputKeyMaterial: sharedSecret);
 }
 
@@ -212,6 +228,27 @@ Future<SharedKey> hkdfSha256({
   final output = Uint8List(32);
   derivator.deriveKey(null, 0, output, 0);
   return SharedKey.fromBytes(output);
+}
+
+/// Protocol v1 hybrid key derivation (Tier-6 PQ).
+///
+/// `material = ecdhBits(32) || mlkemSecret(32)` → HKDF-SHA256 with an empty
+/// salt and [pqHybridHkdfInfo] → 32-byte AES-256 key. Byte-compatible with
+/// the web client's `#tryCombine`.
+Future<SharedKey> deriveHybridKey({
+  required List<int> ecdhBits,
+  required List<int> mlkemSecret,
+}) async {
+  if (ecdhBits.length != 32) {
+    throw ArgumentError.value(ecdhBits.length, 'ecdhBits', 'must be 32 bytes');
+  }
+  if (mlkemSecret.length != 32) {
+    throw ArgumentError.value(mlkemSecret.length, 'mlkemSecret', 'must be 32 bytes');
+  }
+  final material = Uint8List(64)
+    ..setAll(0, ecdhBits)
+    ..setAll(32, mlkemSecret);
+  return hkdfSha256(inputKeyMaterial: material, info: pqHybridHkdfInfoBytes);
 }
 
 // ── Encryption / decryption ────────────────────────────────────────────

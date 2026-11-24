@@ -46,7 +46,10 @@ dependencies:
   media_kit_libs_audio: ^1.0.7
   path_provider: ^2.1.5
   flutter_webrtc: ^1.6.3
-  pqcrypto: ^0.4.4
+  # Tier-6 post-quantum KEM (FIPS 203 ML-KEM-768). Replaces the earlier
+  # `pqcrypto` dependency, which wrapped a different KEM and is not
+  # wire-compatible with the web client's `mlkem` package.
+  mlkem_native: ^1.1.0
 
 dev_dependencies:
   flutter_test:

@@ -807,6 +807,14 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
 
   stateRef.current = state;
 
+  // Protocol v1 (Tier-6 PQ): which side encapsulates the ML-KEM key is
+  // decided by comparing usernames, so the E2EE session must know ours as
+  // soon as it is known.
+  const ownUsername = state.user?.username;
+  useEffect(() => {
+    if (ownUsername !== undefined) e2eeRef.current.setOwnUsername(ownUsername);
+  }, [ownUsername]);
+
   const showError = useCallback((message: string) => {
     dispatch({ type: 'SET_ERROR', payload: message });
     if (errorTimerRef.current !== null) {
@@ -1788,8 +1796,14 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
     });
 
     socket.on(EVENTS.SERVER.E2EE_PUBLIC_KEY, (data) => {
+      // Protocol v1 needs our username for the initiator comparison
+      // (ownUsername < peerUsername ⇒ we encapsulate).
+      const own = stateRef.current.user?.username;
+      if (own !== undefined) e2eeRef.current.setOwnUsername(own);
       e2eeRef.current.deriveSharedSecret(data.fromUsername, data.publicKey).catch(() => {});
       if (data.mlkemPublicKey !== undefined) {
+        // Register the ciphertext sender before handling the peer's PQ key so
+        // an encapsulation started here can always reach the wire.
         e2eeRef.current.registerMlkemCtSender(data.fromUsername, (ct) => {
           const b64 = btoa(String.fromCharCode(...ct));
           socketRef.current.emit(EVENTS.CLIENT.E2EE_MLKEM_CT, {
@@ -1804,6 +1818,8 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
     });
 
     socket.on(EVENTS.SERVER.E2EE_MLKEM_CT, (data: { fromUsername: string; ciphertext: string }) => {
+      const own = stateRef.current.user?.username;
+      if (own !== undefined) e2eeRef.current.setOwnUsername(own);
       e2eeRef.current.handleMlkemCiphertext(data.fromUsername, data.ciphertext).catch(() => {});
     });
 

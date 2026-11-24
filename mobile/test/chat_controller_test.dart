@@ -114,6 +114,10 @@ class FakeSocketService implements SocketService {
       _record(ChatEvents.e2eePublicKey, payload);
 
   @override
+  void sendE2eeMlkemCt(E2eeMlkemCtPayload payload) =>
+      _record(ChatEvents.e2eeMlkemCt, payload);
+
+  @override
   void sendRegister(RegisterPayload payload) => _record(ChatEvents.userRegister, payload);
 
   @override
@@ -233,6 +237,13 @@ class FakeSocketService implements SocketService {
   Unsubscribe onE2eePublicKey(void Function(E2eePublicKeyRelay relay) handler) {
     return _register(ChatEvents.e2eePublicKey, (payload) {
       handler(payload! as E2eePublicKeyRelay);
+    });
+  }
+
+  @override
+  Unsubscribe onE2eeMlkemCt(void Function(E2eeMlkemCtRelay relay) handler) {
+    return _register(ChatEvents.e2eeMlkemCt, (payload) {
+      handler(payload! as E2eeMlkemCtRelay);
     });
   }
 

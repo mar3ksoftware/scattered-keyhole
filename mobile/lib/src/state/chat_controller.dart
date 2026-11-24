@@ -1983,6 +1983,7 @@ class ChatController extends ChangeNotifier {
       _socket.onActiveUsers(_handleActiveUsers),
       _socket.onActiveGroups(_handleActiveGroups),
       _socket.onE2eePublicKey(_handleE2eePublicKey),
+      _socket.onE2eeMlkemCt(_handleE2eeMlkemCt),
       _socket.onPrivateMessage(_handlePrivateMessage),
       _socket.onGroupCreated(_handleGroupCreated),
       _socket.onGroupCreatedError(_handleGroupError),
@@ -2059,6 +2060,7 @@ class ChatController extends ChangeNotifier {
       username: result.username,
       isGuest: false,
     );
+    _syncOwnUsername();
     _isLoading = false;
     _notify();
   }
@@ -2080,6 +2082,7 @@ class ChatController extends ChangeNotifier {
         username: user.username,
         isGuest: true,
       );
+      _syncOwnUsername();
       _isLoading = false;
     }
     if (!_directory.contains(user.username)) _directory.add(user.username);
@@ -2125,6 +2128,7 @@ class ChatController extends ChangeNotifier {
     // Include ourselves: the server relays the key back to our own room,
     // which gives us the self shared key used to decrypt our own group
     // echoes (mirrors ChatContext.tsx).
+    _syncOwnUsername();
     for (final user in users) {
       _sendPublicKeyTo(user.username);
     }
@@ -2215,23 +2219,74 @@ class ChatController extends ChangeNotifier {
   Future<void> _emitPublicKey(String to) async {
     try {
       final publicKey = await _e2ee.getPublicKey();
+      final mlkemPublicKey = await _e2ee.getPqPublicKey();
       if (_disposed) return;
+      // Register the ciphertext sender before the public key goes out so an
+      // encapsulation triggered by the peer's reply can always reach the wire.
+      _e2ee.registerMlkemCtSender(to, (ct) {
+        if (_disposed) return;
+        _socket.sendE2eeMlkemCt(
+          E2eeMlkemCtPayload(to: to, ciphertext: base64Encode(ct)),
+        );
+      });
       _socket.sendE2eePublicKey(
-        E2eePublicKeyPayload(to: to, publicKey: publicKey),
+        E2eePublicKeyPayload(
+          to: to,
+          publicKey: publicKey,
+          mlkemPublicKey: mlkemPublicKey,
+        ),
       );
     } catch (_) {
       // Key generation failure surfaces later as a send error.
     }
   }
 
+  /// Keeps the E2EE session's notion of our username in sync with the roster;
+  /// protocol v1 uses it to pick the ML-KEM initiator deterministically.
+  void _syncOwnUsername() {
+    final username = _me?.username;
+    if (username != null && username.isNotEmpty) {
+      _e2ee.setOwnUsername(username);
+    }
+  }
+
   Future<void> _handleE2eePublicKey(E2eePublicKeyRelay relay) async {
+    _syncOwnUsername();
     try {
       await _e2ee.deriveSharedSecret(relay.fromUsername, relay.publicKey);
     } catch (_) {
       return;
     }
+    final mlkemPublicKey = relay.mlkemPublicKey;
+    if (mlkemPublicKey != null && mlkemPublicKey.isNotEmpty) {
+      // Wire the ciphertext transport before handling the key: if this side
+      // is the protocol-v1 initiator it may encapsulate immediately.
+      _e2ee.registerMlkemCtSender(relay.fromUsername, (ct) {
+        if (_disposed) return;
+        _socket.sendE2eeMlkemCt(
+          E2eeMlkemCtPayload(
+            to: relay.fromUsername,
+            ciphertext: base64Encode(ct),
+          ),
+        );
+      });
+      try {
+        await _e2ee.handlePeerPqPublicKey(relay.fromUsername, mlkemPublicKey);
+      } catch (_) {
+        // Malformed peer key: keep the ECDH-only session usable.
+      }
+    }
     // The key we were waiting for may have just arrived.
     _retryPendingDecryptions();
+  }
+
+  Future<void> _handleE2eeMlkemCt(E2eeMlkemCtRelay relay) async {
+    _syncOwnUsername();
+    await _ignoreErrors(
+      _e2ee.handleMlkemCiphertext(relay.fromUsername, relay.ciphertext),
+    );
+    // Hybrid keys only affect new sends; queued messages already decrypted
+    // with the ECDH-only key are unaffected.
   }
 
   // ── Private message handling ───────────────────────────────────────────
