@@ -2,6 +2,8 @@
     <!-- Voice lane (spec H): capture voice notes and keep audio focus. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
+    <!-- Calls lane (spec: Tier-8a): camera capture for 1:1 video calls. -->
+    <uses-permission android:name="android.permission.CAMERA"/>
     <application
         android:label="Scattered Keyhole"
         android:name="${applicationName}"

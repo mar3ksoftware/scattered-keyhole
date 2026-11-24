@@ -200,6 +200,26 @@ class FakeSocketService implements SocketService {
   void sendKickReset(GroupTargetPayload payload) =>
       _record(ChatEvents.groupKickReset, payload);
 
+  @override
+  void sendCallOffer(CallOfferPayload payload) =>
+      _record(ChatEvents.callOffer, payload);
+
+  @override
+  void sendCallAnswer(CallAnswerPayload payload) =>
+      _record(ChatEvents.callAnswer, payload);
+
+  @override
+  void sendCallIce(CallIcePayload payload) =>
+      _record(ChatEvents.callIce, payload);
+
+  @override
+  void sendCallEnd(CallEndPayload payload) =>
+      _record(ChatEvents.callEnd, payload);
+
+  @override
+  void sendCallReject(CallEndPayload payload) =>
+      _record(ChatEvents.callReject, payload);
+
   // ── Inbound ────────────────────────────────────────────────────────────
 
   @override
@@ -431,6 +451,41 @@ class FakeSocketService implements SocketService {
   Unsubscribe onNotice(void Function(NoticePayload payload) handler) {
     return _register(ChatEvents.notice, (data) {
       handler(data! as NoticePayload);
+    });
+  }
+
+  @override
+  Unsubscribe onCallOffer(void Function(CallOfferRelay relay) handler) {
+    return _register(ChatEvents.callOffer, (data) {
+      handler(data! as CallOfferRelay);
+    });
+  }
+
+  @override
+  Unsubscribe onCallAnswer(void Function(CallAnswerRelay relay) handler) {
+    return _register(ChatEvents.callAnswer, (data) {
+      handler(data! as CallAnswerRelay);
+    });
+  }
+
+  @override
+  Unsubscribe onCallIce(void Function(CallIceRelay relay) handler) {
+    return _register(ChatEvents.callIce, (data) {
+      handler(data! as CallIceRelay);
+    });
+  }
+
+  @override
+  Unsubscribe onCallEnd(void Function(CallEndRelay relay) handler) {
+    return _register(ChatEvents.callEnd, (data) {
+      handler(data! as CallEndRelay);
+    });
+  }
+
+  @override
+  Unsubscribe onCallReject(void Function(CallEndRelay relay) handler) {
+    return _register(ChatEvents.callReject, (data) {
+      handler(data! as CallEndRelay);
     });
   }
 

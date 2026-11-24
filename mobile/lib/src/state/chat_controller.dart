@@ -20,6 +20,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 
+import '../calls/call_transport.dart';
 import '../crypto/e2ee.dart';
 import '../crypto/e2ee_session.dart';
 import '../crypto/media_crypto.dart';
@@ -138,7 +139,9 @@ class ChatController extends ChangeNotifier {
     this._sharedKeyTimeoutMs = 3000,
     this.typingRepeatDelay = const Duration(milliseconds: 4000),
     this.typingHideDelay = const Duration(milliseconds: 6000),
-  }) : _e2ee = e2ee ?? E2eeSession() {
+    CallTransport Function()? callTransportFactory,
+  })  : _e2ee = e2ee ?? E2eeSession(),
+        _callTransportFactory = callTransportFactory ?? WebRtcCallTransport.new {
     _listen();
     connect();
   }
@@ -182,6 +185,10 @@ class ChatController extends ChangeNotifier {
   /// Receiver-side auto-hide: an incoming indicator disappears after this
   /// even if `active:false` never arrives (web `TYPING_HIDE_MS`).
   final Duration typingHideDelay;
+
+  /// Builds the media transport for each call. Tests inject a fake here;
+  /// production uses the `flutter_webrtc` implementation.
+  final CallTransport Function() _callTransportFactory;
 
   /// Default typing hide window, in milliseconds (spec C1: 6 s).
   static const int typingHideMs = 6000;
@@ -279,6 +286,25 @@ class ChatController extends ChangeNotifier {
   Timer? _purgeTimer;
   /// Whether the app currently has focus (C7's background rule).
   bool _appFocused = true;
+
+  // ── Call state (Tier-8a) ──────────────────────────────────────────────
+
+  CallState _callState = CallState.idle;
+  String? _callPeer;
+
+  /// Live transport for the current call, null while idle.
+  CallTransport? _call;
+
+  /// SDP offer received while the call was still ringing; consumed by
+  /// [acceptCall].
+  String? _pendingOfferSdp;
+
+  /// ICE candidates that arrived before a remote description existed.
+  final List<String> _pendingIce = <String>[];
+
+  /// Whether the peer connection has a remote description yet — the gate for
+  /// applying candidates immediately instead of queueing them.
+  bool _callRemoteDescriptionSet = false;
 
   // ── Getters ────────────────────────────────────────────────────────────
 
@@ -501,6 +527,7 @@ class ChatController extends ChangeNotifier {
     _errorTimer = null;
     _stopTypingBurst();
     _clearTypingIndicators();
+    unawaited(_cleanupCall());
     _socket.disconnect();
     _e2ee = E2eeSession();
     _users.clear();
@@ -1264,6 +1291,211 @@ class ChatController extends ChangeNotifier {
     _showError(payload.message);
   }
 
+  // ── Calls (Tier-8a) ────────────────────────────────────────────────────
+  //
+  // Signaling is relay-only on the server and mirrors the web client's
+  // `ChatContext` handlers one-for-one: offer → incoming, answer → connected,
+  // candidates buffered until a remote description exists, end/reject → idle.
+
+  CallState get callState => _callState;
+
+  /// Username of the peer in the current call, or null while idle.
+  String? get callPeer => _callPeer;
+
+  /// Media handle for the in-call overlay; null while no call is up.
+  CallTransport? get callTransport => _call;
+
+  /// Dials [peer]: captures local media, builds the offer and sends it.
+  ///
+  /// No-op while another call is active — the signaling channel carries one
+  /// call per peer pair at a time.
+  Future<void> startCall(String peer) async {
+    if (_callState != CallState.idle || peer.isEmpty) return;
+
+    final transport = _callTransportFactory();
+    _call = transport;
+    _callState = CallState.calling;
+    _callPeer = peer;
+    _callRemoteDescriptionSet = false;
+    _pendingOfferSdp = null;
+    _pendingIce.clear();
+    _notify();
+
+    try {
+      await transport.getUserMedia(audio: true, video: true);
+      await transport.createPeerConnection(
+        onIceCandidate: (candidateJson) {
+          if (!identical(_call, transport)) return;
+          _socket.sendCallIce(
+            CallIcePayload(to: peer, candidate: candidateJson),
+          );
+        },
+        onTrack: _notify,
+        onConnectionStateChange: (state) =>
+            _handleCallConnectionState(transport, state),
+      );
+      await transport.addTracks();
+      final offer = await transport.createOffer();
+      await transport.setLocalDescription('offer', offer);
+      // The call may have been hung up while the offer was negotiated.
+      if (!identical(_call, transport)) return;
+      _socket.sendCallOffer(CallOfferPayload(to: peer, sdp: offer));
+    } catch (_) {
+      if (!identical(_call, transport)) return;
+      await _cleanupCall();
+      _showError('Could not start the call.');
+    }
+  }
+
+  /// Accepts the ringing call: applies the buffered offer, flushes the
+  /// queued candidates, then answers and moves to `connected`.
+  Future<void> acceptCall() async {
+    if (_callState != CallState.incoming) return;
+    final peer = _callPeer;
+    if (peer == null) return;
+
+    final offerSdp = _pendingOfferSdp;
+    final transport = _callTransportFactory();
+    _call = transport;
+    _callRemoteDescriptionSet = false;
+
+    try {
+      await transport.getUserMedia(audio: true, video: true);
+      await transport.createPeerConnection(
+        onIceCandidate: (candidateJson) {
+          if (!identical(_call, transport)) return;
+          _socket.sendCallIce(
+            CallIcePayload(to: peer, candidate: candidateJson),
+          );
+        },
+        onTrack: _notify,
+        onConnectionStateChange: (state) =>
+            _handleCallConnectionState(transport, state),
+      );
+      await transport.addTracks();
+      if (offerSdp != null && offerSdp.isNotEmpty) {
+        await transport.setRemoteDescription('offer', offerSdp);
+        _callRemoteDescriptionSet = true;
+        await _flushPendingIce(transport);
+      }
+      final answer = await transport.createAnswer();
+      await transport.setLocalDescription('answer', answer);
+      if (!identical(_call, transport)) return;
+      _pendingOfferSdp = null;
+      _socket.sendCallAnswer(CallAnswerPayload(to: peer, sdp: answer));
+      _callState = CallState.connected;
+      _notify();
+    } catch (_) {
+      if (!identical(_call, transport)) return;
+      await _cleanupCall();
+      _showError('Could not answer the call.');
+    }
+  }
+
+  /// Declines the ringing call and tells the caller.
+  void rejectCall() {
+    final peer = _callPeer;
+    if (peer != null) _socket.sendCallReject(CallEndPayload(to: peer));
+    unawaited(_cleanupCall());
+  }
+
+  /// Hangs up the active call and tells the peer.
+  void endCall() {
+    final peer = _callPeer;
+    if (peer != null) _socket.sendCallEnd(CallEndPayload(to: peer));
+    unawaited(_cleanupCall());
+  }
+
+  void _handleCallOffer(CallOfferRelay relay) {
+    // One call at a time: a second offer while busy is dropped rather than
+    // tearing down the live call.
+    if (_callState != CallState.idle) return;
+    _pendingOfferSdp = relay.sdp;
+    _pendingIce.clear();
+    _callRemoteDescriptionSet = false;
+    _callPeer = relay.fromUsername;
+    _callState = CallState.incoming;
+    _notify();
+  }
+
+  Future<void> _handleCallAnswer(CallAnswerRelay relay) async {
+    final transport = _call;
+    if (transport != null && relay.sdp.isNotEmpty) {
+      try {
+        await transport.setRemoteDescription('answer', relay.sdp);
+        _callRemoteDescriptionSet = true;
+        await _flushPendingIce(transport);
+      } catch (_) {
+        // A rejected answer leaves the caller in `calling`; the peer's
+        // hang-up or the connection state will reset it.
+      }
+    }
+    if (_callState == CallState.idle) return;
+    _callState = CallState.connected;
+    _notify();
+  }
+
+  Future<void> _handleCallIce(CallIceRelay relay) async {
+    if (relay.candidate.isEmpty) return;
+    final transport = _call;
+    if (transport == null || !_callRemoteDescriptionSet) {
+      // Candidates usually arrive before the callee accepts; hold them until
+      // a remote description exists, exactly like the web client.
+      _pendingIce.add(relay.candidate);
+      return;
+    }
+    try {
+      await transport.addIceCandidate(relay.candidate);
+    } catch (_) {
+      // A malformed or stale candidate must not break the call.
+    }
+  }
+
+  void _handleCallHangup(CallEndRelay relay) {
+    unawaited(_cleanupCall());
+  }
+
+  void _handleCallConnectionState(CallTransport transport, String state) {
+    if (!identical(_call, transport)) return;
+    if (state == 'disconnected' || state == 'failed' || state == 'closed') {
+      unawaited(_cleanupCall());
+    }
+  }
+
+  Future<void> _flushPendingIce(CallTransport transport) async {
+    if (_pendingIce.isEmpty) return;
+    final pending = List<String>.of(_pendingIce);
+    _pendingIce.clear();
+    for (final candidate in pending) {
+      try {
+        await transport.addIceCandidate(candidate);
+      } catch (_) {
+        // Skip candidates the platform rejects; the rest still apply.
+      }
+    }
+  }
+
+  /// Releases media, drops buffered signaling state and returns to idle.
+  ///
+  /// The state reset happens synchronously so callers (and the UI) observe
+  /// `idle` immediately; closing the transport is awaited afterwards.
+  Future<void> _cleanupCall() async {
+    final transport = _call;
+    _call = null;
+    _callState = CallState.idle;
+    _callPeer = null;
+    _callRemoteDescriptionSet = false;
+    _pendingOfferSdp = null;
+    _pendingIce.clear();
+    _notify();
+    if (transport == null) return;
+    try {
+      await transport.close();
+    } catch (_) {
+      // Nothing left to release if the platform already closed it.
+    }
+  }
+
   // ── Typing (C1) ────────────────────────────────────────────────────────
 
   /// Starts (or keeps alive) the outgoing typing burst for [target]. While
@@ -2008,6 +2240,11 @@ class ChatController extends ChangeNotifier {
       _socket.onMessagePinned(_handleMessagePinned),
       _socket.onDisappearingChanged(_handleDisappearingChanged),
       _socket.onNotice(_handleNotice),
+      _socket.onCallOffer(_handleCallOffer),
+      _socket.onCallAnswer(_handleCallAnswer),
+      _socket.onCallIce(_handleCallIce),
+      _socket.onCallEnd(_handleCallHangup),
+      _socket.onCallReject(_handleCallHangup),
     ]);
   }
 
@@ -2639,6 +2876,7 @@ class ChatController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    unawaited(_cleanupCall());
     _errorTimer?.cancel();
     _errorTimer = null;
     _purgeTimer?.cancel();

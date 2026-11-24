@@ -27,6 +27,14 @@ abstract final class ChatEvents {
   static const messagePin = 'message:pin';
   static const disappearingSet = 'disappearing:set';
 
+  // Call signaling (Tier-8a) uses the same event names in both directions;
+  // the server relays each one with `from`/`fromUsername` attached.
+  static const callOffer = 'call:offer';
+  static const callAnswer = 'call:answer';
+  static const callIce = 'call:ice';
+  static const callEnd = 'call:end';
+  static const callReject = 'call:reject';
+
   // Server -> client.
   static const mediaToken = 'media:token';
   static const userJoined = 'user:joined';

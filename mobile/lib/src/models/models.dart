@@ -1,4 +1,5 @@
 export 'auth.dart';
+export 'call.dart';
 export 'e2ee.dart';
 export 'errors.dart';
 export 'group.dart';
