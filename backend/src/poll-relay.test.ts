@@ -9,12 +9,12 @@ import { AccountStore } from './account-store';
 import { DmSettingsStore } from './dm-settings-store';
 import { GroupStore } from './group-store';
 import { KickVoteStore } from './kick-vote-store';
-import { TombstoneStore } from './tombstone-store';
-import { MessageStore } from './message-store';
 import { MediaAuth } from './media-auth';
+import { MessageStore } from './message-store';
 import { ProfileStore } from './profile-store';
 import { RateLimiterRegistry } from './rate-limiter';
 import { createServer } from './server';
+import { TombstoneStore } from './tombstone-store';
 import type {
   ClientToServerEvents,
   GroupInfo,

@@ -9,7 +9,11 @@ export type StoredMessage = {
   readonly groupId: string;
   readonly from: string;
   readonly fromUsername: string;
-  readonly ciphertexts: readonly { readonly to: string; readonly ciphertext: string; readonly iv: string }[];
+  readonly ciphertexts: readonly {
+    readonly to: string;
+    readonly ciphertext: string;
+    readonly iv: string;
+  }[];
   readonly timestamp: number;
 };
 
@@ -34,14 +38,30 @@ export class MessageStore {
   store(msg: StoredMessage): void {
     this.#db.run(
       'INSERT OR REPLACE INTO room_messages (id, group_id, from_user, from_username, payload_json, timestamp) VALUES (?, ?, ?, ?, ?, ?)',
-      [msg.id, msg.groupId, msg.from, msg.fromUsername, JSON.stringify(msg.ciphertexts), msg.timestamp],
+      [
+        msg.id,
+        msg.groupId,
+        msg.from,
+        msg.fromUsername,
+        JSON.stringify(msg.ciphertexts),
+        msg.timestamp,
+      ],
     );
   }
 
   forGroup(groupId: string): StoredMessage[] {
     const rows = this.#db
-      .query('SELECT id, group_id, from_user, from_username, payload_json, timestamp FROM room_messages WHERE group_id = ? ORDER BY timestamp ASC')
-      .all(groupId) as { id: string; group_id: string; from_user: string; from_username: string; payload_json: string; timestamp: number }[];
+      .query(
+        'SELECT id, group_id, from_user, from_username, payload_json, timestamp FROM room_messages WHERE group_id = ? ORDER BY timestamp ASC',
+      )
+      .all(groupId) as {
+      id: string;
+      group_id: string;
+      from_user: string;
+      from_username: string;
+      payload_json: string;
+      timestamp: number;
+    }[];
     return rows.map((r) => ({
       id: r.id,
       groupId: r.group_id,
