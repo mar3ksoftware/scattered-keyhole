@@ -1,9 +1,15 @@
 import { describe, expect, test } from 'bun:test';
 import type { ValidationResult } from './types';
 import {
+  validateGroupCallAnswerPayload,
+  validateGroupCallIcePayload,
+  validateGroupCallJoinPayload,
+  validateGroupCallOfferPayload,
+  validateGroupCallSfuTokenPayload,
   validateGroupCreatePayload,
   validateGroupMessagePayload,
   validateGroupTargetPayload,
+  validateGroupTopologyPayload,
   validateMessageDeletePayload,
   validateMessageEditPayload,
   validateMessagePayload,
@@ -185,7 +191,29 @@ describe('validateGroupCreatePayload', () => {
     if (result.success) {
       expect(result.data.name).toBe('My Group');
       expect(result.data.members).toEqual(['alice', 'bob']);
+      expect(result.data.topology).toBe('mesh');
     }
+  });
+
+  test('explicit topology is preserved', () => {
+    const result = validateGroupCreatePayload({
+      name: 'SFU Group',
+      members: [],
+      topology: 'sfu',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.topology).toBe('sfu');
+    }
+  });
+
+  test('unknown topology fails', () => {
+    const result = validateGroupCreatePayload({
+      name: 'Group',
+      members: [],
+      topology: 'p2p',
+    });
+    expect(result.success).toBe(false);
   });
 
   test('empty name fails', () => {
@@ -555,5 +583,49 @@ describe('validateProfileUpdatePayload', () => {
   test('control char in status fails', () => {
     const result = validateProfileUpdatePayload({ displayName: 'Alice', status: `ok${BEL}no` });
     expect(result.success).toBe(false);
+  });
+});
+
+describe('group call validators', () => {
+  const GROUP_ID = '4d5e6f70-8192-4a3b-8c4d-5e6f70819234';
+
+  test('valid topology switch passes', () => {
+    const result = validateGroupTopologyPayload({ groupId: GROUP_ID, topology: 'sfu' });
+    expect(result.success).toBe(true);
+  });
+
+  test('unknown topology fails', () => {
+    const result = validateGroupTopologyPayload({ groupId: GROUP_ID, topology: 'p2p' });
+    expect(result.success).toBe(false);
+  });
+
+  test('extra topology fields fail', () => {
+    const result = validateGroupTopologyPayload({
+      groupId: GROUP_ID,
+      topology: 'mesh',
+      extra: true,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  test('join, leave, and sfu_token accept only groupId', () => {
+    expect(validateGroupCallJoinPayload({ groupId: GROUP_ID }).success).toBe(true);
+    expect(validateGroupCallJoinPayload({ groupId: GROUP_ID, extra: true }).success).toBe(false);
+    expect(validateGroupCallSfuTokenPayload({ groupId: GROUP_ID }).success).toBe(true);
+  });
+
+  test('offer and answer require groupId, to, and sdp', () => {
+    const valid = { groupId: GROUP_ID, to: 'bob', sdp: 'v=0' };
+    expect(validateGroupCallOfferPayload(valid).success).toBe(true);
+    expect(validateGroupCallAnswerPayload(valid).success).toBe(true);
+    expect(validateGroupCallOfferPayload({ groupId: GROUP_ID, to: 'bob' }).success).toBe(false);
+    expect(validateGroupCallAnswerPayload({ ...valid, sdp: '' }).success).toBe(false);
+  });
+
+  test('ice requires groupId, to, and candidate', () => {
+    expect(
+      validateGroupCallIcePayload({ groupId: GROUP_ID, to: 'bob', candidate: '{"x":1}' }).success,
+    ).toBe(true);
+    expect(validateGroupCallIcePayload({ groupId: GROUP_ID, to: 'bob' }).success).toBe(false);
   });
 });

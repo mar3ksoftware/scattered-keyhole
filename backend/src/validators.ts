@@ -51,10 +51,14 @@ const e2eePublicKeyPayloadSchema = z.strictObject({
   mlkemPublicKey: z.string().min(1).optional(),
 });
 
+const callTopologySchema = z.enum(['mesh', 'sfu']);
+
 const groupCreatePayloadSchema = z.strictObject({
   name: z.string().min(1).max(CONSTANTS.MAX_GROUP_NAME_LENGTH),
   description: z.string().max(CONSTANTS.MAX_GROUP_DESCRIPTION_LENGTH).default(''),
   persistent: z.boolean().default(false),
+  // Rooms default to peer-to-peer calls; an admin can move the room to SFU.
+  topology: callTopologySchema.default('mesh'),
   members: z
     .array(z.string().min(1).max(CONSTANTS.MAX_USERNAME_LENGTH))
     .max(CONSTANTS.MAX_GROUP_MEMBERS),
@@ -266,9 +270,11 @@ export function validateLoginPayload(
   return toValidationResult(loginPayloadSchema, input);
 }
 
-export function validateE2eePublicKeyPayload(
-  input: unknown,
-): ValidationResult<{ readonly to: string; readonly publicKey: string; readonly mlkemPublicKey?: string | undefined }> {
+export function validateE2eePublicKeyPayload(input: unknown): ValidationResult<{
+  readonly to: string;
+  readonly publicKey: string;
+  readonly mlkemPublicKey?: string | undefined;
+}> {
   return toValidationResult(e2eePublicKeyPayloadSchema, input);
 }
 
@@ -276,6 +282,7 @@ export function validateGroupCreatePayload(input: unknown): ValidationResult<{
   readonly name: string;
   readonly description: string;
   readonly persistent: boolean;
+  readonly topology: 'mesh' | 'sfu';
   readonly members: readonly string[];
 }> {
   return toValidationResult(groupCreatePayloadSchema, input);
@@ -390,31 +397,116 @@ export function validateGroupKickResetPayload(
 }
 
 // ── Tier-8 call signaling validators ──
-const callTargetSchema = z.strictObject({ to: z.string().min(1).max(CONSTANTS.MAX_USERNAME_LENGTH) });
+const callTargetSchema = z.strictObject({
+  to: z.string().min(1).max(CONSTANTS.MAX_USERNAME_LENGTH),
+});
 
-export function validateCallOfferPayload(input: unknown): ValidationResult<{ readonly to: string; readonly sdp: string }> {
-  const schema = z.strictObject({ to: z.string().min(1).max(CONSTANTS.MAX_USERNAME_LENGTH), sdp: z.string().min(1) });
+export function validateCallOfferPayload(
+  input: unknown,
+): ValidationResult<{ readonly to: string; readonly sdp: string }> {
+  const schema = z.strictObject({
+    to: z.string().min(1).max(CONSTANTS.MAX_USERNAME_LENGTH),
+    sdp: z.string().min(1),
+  });
   return toValidationResult(schema, input);
 }
-export function validateCallAnswerPayload(input: unknown): ValidationResult<{ readonly to: string; readonly sdp: string }> {
-  const schema = z.strictObject({ to: z.string().min(1).max(CONSTANTS.MAX_USERNAME_LENGTH), sdp: z.string().min(1) });
+export function validateCallAnswerPayload(
+  input: unknown,
+): ValidationResult<{ readonly to: string; readonly sdp: string }> {
+  const schema = z.strictObject({
+    to: z.string().min(1).max(CONSTANTS.MAX_USERNAME_LENGTH),
+    sdp: z.string().min(1),
+  });
   return toValidationResult(schema, input);
 }
-export function validateCallIcePayload(input: unknown): ValidationResult<{ readonly to: string; readonly candidate: string }> {
-  const schema = z.strictObject({ to: z.string().min(1).max(CONSTANTS.MAX_USERNAME_LENGTH), candidate: z.string().min(1) });
+export function validateCallIcePayload(
+  input: unknown,
+): ValidationResult<{ readonly to: string; readonly candidate: string }> {
+  const schema = z.strictObject({
+    to: z.string().min(1).max(CONSTANTS.MAX_USERNAME_LENGTH),
+    candidate: z.string().min(1),
+  });
   return toValidationResult(schema, input);
 }
 export function validateCallEndPayload(input: unknown): ValidationResult<{ readonly to: string }> {
   return toValidationResult(callTargetSchema, input);
 }
-export function validateCallRejectPayload(input: unknown): ValidationResult<{ readonly to: string }> {
+export function validateCallRejectPayload(
+  input: unknown,
+): ValidationResult<{ readonly to: string }> {
   return toValidationResult(callTargetSchema, input);
 }
 
-export function validateMlkemCiphertextPayload(input: unknown): ValidationResult<{ readonly to: string; readonly ciphertext: string }> {
+export function validateMlkemCiphertextPayload(
+  input: unknown,
+): ValidationResult<{ readonly to: string; readonly ciphertext: string }> {
   const schema = z.strictObject({
     to: z.string().min(1).max(CONSTANTS.MAX_USERNAME_LENGTH),
     ciphertext: z.string().min(1),
   });
+  return toValidationResult(schema, input);
+}
+
+// ── Group call validators ──
+const groupCallTargetSchema = z.strictObject({
+  groupId: z.string().min(1),
+  to: z.string().min(1).max(CONSTANTS.MAX_USERNAME_LENGTH),
+});
+
+const groupCallGroupSchema = z.strictObject({ groupId: z.string().min(1) });
+
+export function validateGroupTopologyPayload(input: unknown): ValidationResult<{
+  readonly groupId: string;
+  readonly topology: 'mesh' | 'sfu';
+}> {
+  const schema = z.strictObject({
+    groupId: z.string().min(1),
+    topology: callTopologySchema,
+  });
+  return toValidationResult(schema, input);
+}
+
+export function validateGroupCallJoinPayload(
+  input: unknown,
+): ValidationResult<{ readonly groupId: string }> {
+  return toValidationResult(groupCallGroupSchema, input);
+}
+
+export function validateGroupCallLeavePayload(
+  input: unknown,
+): ValidationResult<{ readonly groupId: string }> {
+  return toValidationResult(groupCallGroupSchema, input);
+}
+
+export function validateGroupCallSfuTokenPayload(
+  input: unknown,
+): ValidationResult<{ readonly groupId: string }> {
+  return toValidationResult(groupCallGroupSchema, input);
+}
+
+export function validateGroupCallOfferPayload(input: unknown): ValidationResult<{
+  readonly groupId: string;
+  readonly to: string;
+  readonly sdp: string;
+}> {
+  const schema = groupCallTargetSchema.extend({ sdp: z.string().min(1) });
+  return toValidationResult(schema, input);
+}
+
+export function validateGroupCallAnswerPayload(input: unknown): ValidationResult<{
+  readonly groupId: string;
+  readonly to: string;
+  readonly sdp: string;
+}> {
+  const schema = groupCallTargetSchema.extend({ sdp: z.string().min(1) });
+  return toValidationResult(schema, input);
+}
+
+export function validateGroupCallIcePayload(input: unknown): ValidationResult<{
+  readonly groupId: string;
+  readonly to: string;
+  readonly candidate: string;
+}> {
+  const schema = groupCallTargetSchema.extend({ candidate: z.string().min(1) });
   return toValidationResult(schema, input);
 }

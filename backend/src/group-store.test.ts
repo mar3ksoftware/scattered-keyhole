@@ -190,4 +190,37 @@ describe('GroupStore', () => {
     store.destroy();
     expect(store.getGroupsForUser(UserId('user19')).length).toBe(0);
   });
+
+  test('createGroup defaults to mesh and accepts an explicit topology', () => {
+    store = new GroupStore();
+    const creator: UserInfo = {
+      userId: UserId('user20'),
+      username: 'pete',
+      socketId: null as unknown as never,
+      joinedAt: Date.now(),
+    };
+
+    const mesh = store.createGroup('Mesh Group', creator);
+    expect(mesh.topology).toBe('mesh');
+
+    const sfu = store.createGroup('SFU Group', creator, '', false, 'sfu');
+    expect(sfu.topology).toBe('sfu');
+  });
+
+  test('updateGroup switches topology and preserves the other fields', () => {
+    store = new GroupStore();
+    const creator: UserInfo = {
+      userId: UserId('user21'),
+      username: 'quinn',
+      socketId: null as unknown as never,
+      joinedAt: Date.now(),
+    };
+
+    const group = store.createGroup('Topology Group', creator, 'desc');
+    const updated = store.updateGroup(group.groupId, { topology: 'sfu' });
+
+    expect(updated?.topology).toBe('sfu');
+    expect(updated?.name).toBe('Topology Group');
+    expect(updated?.description).toBe('desc');
+  });
 });

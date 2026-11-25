@@ -45,3 +45,26 @@ describe('createConfig TLS', () => {
     expect(config.pingTimeout).toBe(20_000);
   });
 });
+
+describe('createConfig LiveKit', () => {
+  test('all three vars are read and trimmed', () => {
+    const config = createConfig({
+      LIVEKIT_URL: ' wss://livekit.example ',
+      LIVEKIT_API_KEY: ' key ',
+      LIVEKIT_API_SECRET: ' secret ',
+    });
+    expect(config.livekitUrl).toBe('wss://livekit.example');
+    expect(config.livekitApiKey).toBe('key');
+    expect(config.livekitApiSecret).toBe('secret');
+  });
+
+  test('unset or blank values become null', () => {
+    const config = createConfig({
+      LIVEKIT_URL: '',
+      LIVEKIT_API_KEY: '   ',
+    });
+    expect(config.livekitUrl).toBeNull();
+    expect(config.livekitApiKey).toBeNull();
+    expect(config.livekitApiSecret).toBeNull();
+  });
+});
