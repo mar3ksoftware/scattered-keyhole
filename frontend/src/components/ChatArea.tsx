@@ -6,6 +6,8 @@ import { isAdminOf } from '../lib/permissions';
 import type { ConversationTarget, ReplyRef } from '../types';
 import { ChatHeader } from './ChatHeader';
 import { EditGroupModal } from './EditGroupModal';
+import { GroupCallControls } from './GroupCallControls';
+import { GroupCallOverlay } from './GroupCallOverlay';
 import { GroupMembersPanel } from './GroupMembersPanel';
 import { MessageInput } from './MessageInput';
 import { MessageList } from './MessageList';
@@ -49,6 +51,14 @@ export function ChatArea({ selectedUser, selectedGroup, onBack, showBack }: Chat
     acceptCall,
     rejectCall,
     endCall,
+    groupCallState,
+    groupCallPeers,
+    groupCallLocalStream,
+    groupCallGroupId,
+    groupCallTopology,
+    joinGroupCall,
+    leaveGroupCall,
+    setGroupTopology,
   } = useChat();
   const [showMembers, setShowMembers] = useState(false);
   const [editingGroup, setEditingGroup] = useState(false);
@@ -181,6 +191,13 @@ export function ChatArea({ selectedUser, selectedGroup, onBack, showBack }: Chat
         ? (selectedGroupInfo?.disappearing ?? 0)
         : (dmDisappearing[`dm:${conversationTarget.username}`] ?? 0);
 
+  // Group call controls: the header shows the live state only for the room
+  // currently open; another room's live call keeps this entry point inert.
+  const groupCallForThisGroup =
+    selectedGroup !== null && groupCallGroupId === selectedGroup && groupCallState !== 'idle';
+  const groupCallParticipantCount = groupCallPeers.length + 1;
+  const groupCallName = groups.find((g) => g.groupId === groupCallGroupId)?.name ?? 'Group call';
+
   // Pin banner (spec B): excerpt of the slot's message via the existing
   // reply-excerpt helper, best-effort scroll on click.
   const pinnedId =
@@ -218,6 +235,23 @@ export function ChatArea({ selectedUser, selectedGroup, onBack, showBack }: Chat
         canEditGroup={selectedGroupInfo !== undefined && canAdmin}
         onEditGroup={
           selectedGroupInfo !== undefined && canAdmin ? () => setEditingGroup(true) : undefined
+        }
+        groupTopology={selectedGroupInfo?.topology}
+        onSelectTopology={
+          selectedGroupInfo !== undefined && canAdmin
+            ? (topology) => setGroupTopology(selectedGroupInfo.groupId, topology)
+            : undefined
+        }
+        callControls={
+          selectedGroupInfo !== undefined ? (
+            <GroupCallControls
+              state={groupCallForThisGroup ? groupCallState : 'idle'}
+              participantCount={groupCallParticipantCount}
+              disabled={groupCallState !== 'idle' && !groupCallForThisGroup}
+              onStart={() => joinGroupCall(selectedGroupInfo.groupId)}
+              onLeave={leaveGroupCall}
+            />
+          ) : undefined
         }
       />
       {selectedUser !== null && (
@@ -267,46 +301,58 @@ export function ChatArea({ selectedUser, selectedGroup, onBack, showBack }: Chat
           </button>
         </div>
       )}
-      {displayName == null ? (
-        <div className="flex-1 flex items-center justify-center">
-          <p className="text-zinc-500 text-sm">Select a conversation</p>
-        </div>
-      ) : (
-        <>
-          {pinnedMessage !== undefined && (
-            <PinBanner
-              excerpt={replyExcerptFor(
-                pinnedMessage.body,
-                pinnedMessage.media ?? null,
-                pinnedMessage.poll ?? null,
-              )}
-              canUnpin={canAdmin}
-              onUnpin={() => {
-                if (pinnedId !== undefined && conversationTarget !== null) {
-                  sendPin(conversationTarget, pinnedId, false);
-                }
-              }}
-              onOpen={revealPinned}
-            />
-          )}
-          <MessageList messages={filteredMessages} onReply={setReply} />
-          <div className="min-h-6 px-5 pt-1 text-xs text-zinc-500" aria-live="polite">
-            {typingNames.length > 0 && `${typingNames.join(', ')} is typing…`}
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        {displayName == null ? (
+          <div className="flex-1 flex items-center justify-center">
+            <p className="text-zinc-500 text-sm">Select a conversation</p>
           </div>
-          <MessageInput
-            onSend={handleSend}
-            onAttach={handleAttach}
-            onSendPoll={handlePollSend}
-            onSendVoice={handleVoice}
-            disabled={connectionStatus !== 'connected'}
-            reply={reply}
-            onClearReply={() => setReply(null)}
-            mentionSuggestions={mentionSuggestions}
-            onTyping={handleTyping}
-            onStopTyping={stopTyping}
+        ) : (
+          <>
+            {pinnedMessage !== undefined && (
+              <PinBanner
+                excerpt={replyExcerptFor(
+                  pinnedMessage.body,
+                  pinnedMessage.media ?? null,
+                  pinnedMessage.poll ?? null,
+                )}
+                canUnpin={canAdmin}
+                onUnpin={() => {
+                  if (pinnedId !== undefined && conversationTarget !== null) {
+                    sendPin(conversationTarget, pinnedId, false);
+                  }
+                }}
+                onOpen={revealPinned}
+              />
+            )}
+            <MessageList messages={filteredMessages} onReply={setReply} />
+            <div className="min-h-6 px-5 pt-1 text-xs text-zinc-500" aria-live="polite">
+              {typingNames.length > 0 && `${typingNames.join(', ')} is typing…`}
+            </div>
+            <MessageInput
+              onSend={handleSend}
+              onAttach={handleAttach}
+              onSendPoll={handlePollSend}
+              onSendVoice={handleVoice}
+              disabled={connectionStatus !== 'connected'}
+              reply={reply}
+              onClearReply={() => setReply(null)}
+              mentionSuggestions={mentionSuggestions}
+              onTyping={handleTyping}
+              onStopTyping={stopTyping}
+            />
+          </>
+        )}
+        {groupCallState !== 'idle' && (
+          <GroupCallOverlay
+            groupName={groupCallName}
+            state={groupCallState}
+            topology={groupCallTopology}
+            peers={groupCallPeers}
+            localStream={groupCallLocalStream}
+            onLeave={leaveGroupCall}
           />
-        </>
-      )}
+        )}
+      </div>
       {showMembers && selectedGroupInfo !== undefined && (
         <GroupMembersPanel group={selectedGroupInfo} onClose={() => setShowMembers(false)} />
       )}

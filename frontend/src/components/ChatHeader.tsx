@@ -1,9 +1,13 @@
-import { useState } from 'react';
+import { type ReactNode, useState } from 'react';
+import type { CallTopology } from '../types';
 import { ConversationSettingsMenu } from './ConversationSettingsMenu';
 
 type ChatHeaderProps = {
   readonly username: string | null;
   readonly subtitle?: string | undefined;
+  // Group-call controls live in the header; DMs pass nothing and keep the
+  // existing call row inside ChatArea untouched.
+  readonly callControls?: ReactNode | undefined;
   readonly onLogout: () => void;
   readonly onBack?: (() => void) | undefined;
   readonly showBack?: boolean | undefined;
@@ -16,6 +20,10 @@ type ChatHeaderProps = {
   readonly onSelectTimer?: ((seconds: number) => void) | undefined;
   readonly canEditGroup?: boolean | undefined;
   readonly onEditGroup?: (() => void) | undefined;
+  // Group call topology shown in the settings menu; the switch is only
+  // wired for admins (onSelectTopology undefined otherwise).
+  readonly groupTopology?: CallTopology | undefined;
+  readonly onSelectTopology?: ((topology: CallTopology) => void) | undefined;
 };
 
 function SettingsIcon() {
@@ -41,6 +49,7 @@ function SettingsIcon() {
 export function ChatHeader({
   username,
   subtitle,
+  callControls,
   onLogout,
   onBack,
   showBack,
@@ -50,6 +59,8 @@ export function ChatHeader({
   onSelectTimer,
   canEditGroup,
   onEditGroup,
+  groupTopology,
+  onSelectTopology,
 }: ChatHeaderProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const showSettings = onSelectTimer !== undefined;
@@ -90,6 +101,7 @@ export function ChatHeader({
         </h1>
         {subtitle !== undefined && <p className="truncate text-xs text-zinc-500">{subtitle}</p>}
       </div>
+      {callControls}
       {onMembersClick !== undefined && (
         <button
           type="button"
@@ -134,6 +146,8 @@ export function ChatHeader({
               disabled={timerDisabled}
               onSelect={pickTimer}
               canEditGroup={canEditGroup}
+              topology={groupTopology}
+              onSelectTopology={onSelectTopology}
               onEditGroup={
                 onEditGroup !== undefined
                   ? () => {

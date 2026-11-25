@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import type { GroupInfo, GroupInfoJson } from '../types';
 import {
   applyGroupUpdated,
+  buildGroupCreatePayload,
   canCreateGroup,
   canSaveGroupEdit,
   isValidGroupDescription,
@@ -15,6 +16,8 @@ const GROUP: GroupInfo = {
   name: 'Team',
   description: '',
   disappearing: 0,
+  persistent: false,
+  topology: 'mesh',
   members: [{ userId: 'u1', username: 'alice', isAdmin: true }],
   createdBy: 'alice',
   createdAt: 1,
@@ -75,6 +78,47 @@ test('group:updated applies full state and preserves everything else', () => {
   assert.equal(next[0]?.description, 'Now with notes');
   assert.equal(next[0]?.disappearing, GROUP.disappearing);
   assert.deepEqual(next[0]?.members, GROUP.members);
+});
+
+test('normalizeGroupInfo defaults topology to mesh for old servers', () => {
+  const json: GroupInfoJson = {
+    groupId: 'grp-1',
+    name: 'Team',
+    members: [],
+    createdBy: 'alice',
+    createdAt: 1,
+  };
+  assert.equal(normalizeGroupInfo(json).topology, 'mesh');
+  assert.equal(normalizeGroupInfo({ ...json, topology: 'sfu' }).topology, 'sfu');
+});
+
+test('group:updated applies topology without dropping the other fields', () => {
+  const next = applyGroupUpdated([GROUP], {
+    groupId: 'grp-1',
+    name: 'Team',
+    description: '',
+    topology: 'sfu',
+  });
+  assert.equal(next[0]?.topology, 'sfu');
+  assert.deepEqual(next[0]?.members, GROUP.members);
+});
+
+test('group:updated keeps topology when an old server omits it', () => {
+  const next = applyGroupUpdated([GROUP], {
+    groupId: 'grp-1',
+    name: 'Team',
+    description: '',
+  });
+  assert.equal(next[0]?.topology, 'mesh');
+});
+
+test('group:create payload carries the chosen topology', () => {
+  assert.deepEqual(buildGroupCreatePayload('Team', ['bob'], undefined, false, 'mesh'), {
+    name: 'Team',
+    members: ['bob'],
+    topology: 'mesh',
+  });
+  assert.equal(buildGroupCreatePayload('Team', ['bob'], 'Notes', true, 'sfu').topology, 'sfu');
 });
 
 test('group:updated for an unknown group is ignored', () => {
