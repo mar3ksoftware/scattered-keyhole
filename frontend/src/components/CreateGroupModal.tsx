@@ -2,10 +2,31 @@ import { useCallback, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useChat } from '../context/ChatContext';
 import { canCreateGroup } from '../lib/group-meta';
-import { CONSTANTS } from '../types';
+import { type CallTopology, CONSTANTS } from '../types';
 
 const MAX_GROUP_NAME_LENGTH = CONSTANTS.MAX_GROUP_NAME_LENGTH;
 const MAX_GROUP_DESCRIPTION_LENGTH = CONSTANTS.MAX_GROUP_DESCRIPTION_LENGTH;
+
+// Frozen UI copy for the topology picker. Mesh is the default so a room
+// keeps media peer-to-peer unless an admin deliberately opts into the SFU.
+export const TOPOLOGY_OPTIONS: readonly {
+  readonly value: CallTopology;
+  readonly label: string;
+  readonly helper: string;
+}[] = [
+  {
+    value: 'mesh',
+    label: 'Mesh (up to 6)',
+    helper:
+      'Everyone connects directly to everyone. Strongest privacy — the server never sees your media.',
+  },
+  {
+    value: 'sfu',
+    label: 'SFU (larger, less private)',
+    helper:
+      'The server forwards audio and video between participants. Larger calls, but the server can see your media.',
+  },
+];
 
 type CreateGroupFormProps = {
   readonly onClose: () => void;
@@ -18,6 +39,7 @@ export function CreateGroupForm({ onClose }: CreateGroupFormProps) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [persistent, setPersistent] = useState(false);
+  const [topology, setTopology] = useState<CallTopology>('mesh');
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const toggleMember = useCallback((username: string) => {
@@ -40,13 +62,15 @@ export function CreateGroupForm({ onClose }: CreateGroupFormProps) {
       Array.from(selected),
       description.length > 0 ? description : undefined,
       persistent,
+      topology,
     );
     setName('');
     setDescription('');
     setPersistent(false);
+    setTopology('mesh');
     setSelected(new Set());
     onClose();
-  }, [name, description, persistent, selected, createGroup, onClose]);
+  }, [name, description, persistent, topology, selected, createGroup, onClose]);
 
   const otherUsers = directory
     .filter((u) => u !== user?.username)
@@ -92,6 +116,36 @@ export function CreateGroupForm({ onClose }: CreateGroupFormProps) {
           />
           Persistent room (messages survive server restart)
         </label>
+        <fieldset className="mb-4">
+          <legend className="block text-sm text-zinc-400 mb-1">Call topology</legend>
+          <div className="grid grid-cols-1 gap-2">
+            {TOPOLOGY_OPTIONS.map((option) => {
+              const checked = topology === option.value;
+              return (
+                <label
+                  key={option.value}
+                  data-topology={option.value}
+                  className={`cursor-pointer rounded-lg border px-3 py-2 text-left transition-colors ${
+                    checked
+                      ? 'border-indigo-500/70 bg-indigo-500/10'
+                      : 'border-zinc-700/50 bg-zinc-800/30 hover:bg-zinc-800/60'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="call-topology"
+                    value={option.value}
+                    checked={checked}
+                    onChange={() => setTopology(option.value)}
+                    className="sr-only"
+                  />
+                  <span className="block text-sm font-medium text-zinc-100">{option.label}</span>
+                  <span className="mt-0.5 block text-xs text-zinc-400">{option.helper}</span>
+                </label>
+              );
+            })}
+          </div>
+        </fieldset>
         <div className="max-h-48 overflow-y-auto mb-4">
           {otherUsers.length === 0 ? (
             <p className="text-sm text-zinc-500">No other users</p>

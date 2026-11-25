@@ -1,4 +1,5 @@
 import { TIMER_OPTIONS } from '../lib/timer';
+import type { CallTopology } from '../types';
 
 type ConversationSettingsMenuProps = {
   // Current conversation timer in seconds; one of the presets is checked.
@@ -8,7 +9,16 @@ type ConversationSettingsMenuProps = {
   readonly onSelect: (seconds: number) => void;
   readonly canEditGroup?: boolean | undefined;
   readonly onEditGroup?: (() => void) | undefined;
+  // Admin-only group call topology switch; absent outside groups and for
+  // non-admins, so the control never renders for them.
+  readonly topology?: CallTopology | undefined;
+  readonly onSelectTopology?: ((topology: CallTopology) => void) | undefined;
 };
+
+const TOPOLOGY_CHOICES: readonly { readonly value: CallTopology; readonly label: string }[] = [
+  { value: 'mesh', label: 'Mesh' },
+  { value: 'sfu', label: 'SFU' },
+];
 
 // The header dropdown panel: timer label, the four preset options, and the
 // admin-only `Edit group` entry. Split out of ChatHeader so widget tests can
@@ -19,6 +29,8 @@ export function ConversationSettingsMenu({
   onSelect,
   canEditGroup,
   onEditGroup,
+  topology,
+  onSelectTopology,
 }: ConversationSettingsMenuProps) {
   return (
     <div
@@ -45,6 +57,30 @@ export function ConversationSettingsMenu({
           )}
         </button>
       ))}
+      {onSelectTopology !== undefined && (
+        <>
+          <p className="mt-1 border-t border-zinc-800 px-2 pt-2 pb-1 text-xs font-medium text-zinc-500">
+            Call topology
+          </p>
+          {TOPOLOGY_CHOICES.map((choice) => (
+            <button
+              key={choice.value}
+              type="button"
+              role="menuitemradio"
+              aria-checked={topology === choice.value}
+              onClick={() => onSelectTopology(choice.value)}
+              className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm text-zinc-200 hover:bg-zinc-800/70"
+            >
+              {choice.label}
+              {topology === choice.value && (
+                <span aria-hidden="true" className="text-indigo-400">
+                  ✓
+                </span>
+              )}
+            </button>
+          ))}
+        </>
+      )}
       {canEditGroup === true && onEditGroup !== undefined && (
         <button
           type="button"

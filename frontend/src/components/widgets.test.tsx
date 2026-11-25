@@ -6,6 +6,8 @@ import { ChatContext, type ChatContextValue } from '../context/ChatContext';
 import { ChatHeader } from './ChatHeader';
 import { ConversationSettingsMenu } from './ConversationSettingsMenu';
 import { CreateGroupForm } from './CreateGroupModal';
+import { GroupCallControls } from './GroupCallControls';
+import { GroupCallOverlay } from './GroupCallOverlay';
 import { MessageActionMenu } from './MessageActionMenu';
 import { PinBanner } from './PinBanner';
 
@@ -135,6 +137,115 @@ test('message action menu shows no pin entry when the user may not pin', () => {
   );
   assert.ok(!html.includes('Pin message'));
   assert.ok(!html.includes('Unpin message'));
+});
+
+test('create group form offers both topology cards and defaults to mesh', () => {
+  const fakeChat = {
+    directory: ['carol'],
+    users: [],
+    user: { userId: 'u1', username: 'alice', isGuest: false },
+    createGroup: () => {},
+  } as unknown as ChatContextValue;
+
+  const html = render(
+    <ChatContext.Provider value={fakeChat}>
+      <CreateGroupForm onClose={() => {}} />
+    </ChatContext.Provider>,
+  );
+  assert.ok(html.includes('Mesh (up to 6)'));
+  assert.ok(html.includes('SFU (larger, less private)'));
+  assert.ok(
+    html.includes(
+      'Everyone connects directly to everyone. Strongest privacy — the server never sees your media.',
+    ),
+  );
+  assert.ok(
+    html.includes(
+      'The server forwards audio and video between participants. Larger calls, but the server can see your media.',
+    ),
+  );
+  // The mesh card is selected by default.
+  assert.ok(html.includes('data-topology="mesh"'));
+  assert.ok(html.includes('value="mesh"'));
+  assert.equal(count(html, 'checked=""'), 1);
+});
+
+test('group call header shows Start call when idle', () => {
+  const html = render(
+    <GroupCallControls state="idle" participantCount={1} onStart={() => {}} onLeave={() => {}} />,
+  );
+  assert.ok(html.includes('Start call'));
+  assert.ok(html.includes('data-key="start-group-call"'));
+  assert.ok(!html.includes('Leave call'));
+});
+
+test('group call header shows the participant count and Leave while active', () => {
+  const html = render(
+    <GroupCallControls state="active" participantCount={3} onStart={() => {}} onLeave={() => {}} />,
+  );
+  assert.ok(html.includes('In call · 3 participants'));
+  assert.ok(html.includes('Leave call'));
+  assert.ok(html.includes('data-key="leave-group-call"'));
+  assert.ok(!html.includes('Start call'));
+});
+
+test('group call header reports the joining state', () => {
+  const html = render(
+    <GroupCallControls
+      state="joining"
+      participantCount={1}
+      onStart={() => {}}
+      onLeave={() => {}}
+    />,
+  );
+  assert.ok(html.includes('Joining call…'));
+  assert.ok(html.includes('Leave call'));
+});
+
+test('SFU group call overlay carries the frozen disclosure copy', () => {
+  const html = render(
+    <GroupCallOverlay
+      groupName="Team"
+      state="active"
+      topology="sfu"
+      peers={[]}
+      localStream={null}
+      onLeave={() => {}}
+    />,
+  );
+  assert.ok(html.includes('Team'));
+  assert.ok(html.includes('SFU room — this server forwards call media (less private than mesh).'));
+});
+
+test('mesh group call overlay does not show the SFU disclosure', () => {
+  const html = render(
+    <GroupCallOverlay
+      groupName="Team"
+      state="active"
+      topology="mesh"
+      peers={[]}
+      localStream={null}
+      onLeave={() => {}}
+    />,
+  );
+  assert.ok(!html.includes('less private than mesh'));
+});
+
+test('settings menu exposes the admin topology switch only when wired', () => {
+  const hidden = render(<ConversationSettingsMenu timerSeconds={0} onSelect={() => {}} />);
+  assert.ok(!hidden.includes('Call topology'));
+
+  const shown = render(
+    <ConversationSettingsMenu
+      timerSeconds={0}
+      onSelect={() => {}}
+      topology="sfu"
+      onSelectTopology={() => {}}
+    />,
+  );
+  assert.ok(shown.includes('Call topology'));
+  assert.ok(shown.includes('Mesh'));
+  assert.ok(shown.includes('SFU'));
 });
 
 test('create group form carries the optional Description field', () => {

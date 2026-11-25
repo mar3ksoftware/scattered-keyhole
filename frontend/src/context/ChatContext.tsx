@@ -1,10 +1,31 @@
 import type { ReactNode } from 'react';
-import { createContext, useCallback, useContext, useEffect, useReducer, useRef } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useReducer,
+  useRef,
+  useState,
+} from 'react';
 import { addTracks, createPeerConnection, getUserMedia } from '../lib/calls';
 import { conversationKeyFor, conversationKeyOfMessage, relayKeyFor } from '../lib/conversation';
 import { E2eeSession } from '../lib/e2ee-session';
 import { expForTimer, parseEnvelope, wrapPollEnvelope, wrapTextEnvelope } from '../lib/envelope';
-import { applyGroupUpdated, canSaveGroupEdit, normalizeGroupInfo } from '../lib/group-meta';
+import {
+  createGroupCallController,
+  EMPTY_GROUP_CALL,
+  type GroupCallController,
+  type GroupCallPeer,
+  type GroupCallPhase,
+  type GroupCallSnapshot,
+} from '../lib/group-calls';
+import {
+  applyGroupUpdated,
+  buildGroupCreatePayload,
+  canSaveGroupEdit,
+  normalizeGroupInfo,
+} from '../lib/group-meta';
 import { clearMediaCache, MediaError, prepareAndUpload } from '../lib/media';
 import { mentionsMe } from '../lib/mentions';
 import { createPendingOps } from '../lib/pending-ops';
@@ -14,6 +35,7 @@ import { purgeExpired, shouldStoreAtIngestion, startPurgeInterval } from '../lib
 import { getSocket } from '../lib/socket';
 import { applyDisappearing, isPresetSeconds, timerSecondsOf } from '../lib/timer';
 import type {
+  CallTopology,
   ConversationTarget,
   DecryptedGroupMessage,
   DecryptedMessage,
@@ -183,7 +205,12 @@ type ChatAction =
   | {
       // Full-state apply from group:updated; unknown groups are ignored.
       type: 'UPDATE_GROUP';
-      payload: { readonly groupId: string; readonly name: string; readonly description: string };
+      payload: {
+        readonly groupId: string;
+        readonly name: string;
+        readonly description: string;
+        readonly topology?: CallTopology;
+      };
     }
   | {
       type: 'SET_CALL_STATE';
@@ -678,6 +705,7 @@ export type ChatContextValue = {
     members: readonly string[],
     description?: string,
     persistent?: boolean,
+    topology?: CallTopology,
   ) => void;
   readonly sendGroupMessage: (
     groupId: string,
@@ -702,6 +730,15 @@ export type ChatContextValue = {
   readonly acceptCall: () => void;
   readonly rejectCall: () => void;
   readonly endCall: () => void;
+  // ── Group calls ──
+  readonly groupCallState: GroupCallPhase;
+  readonly groupCallPeers: readonly GroupCallPeer[];
+  readonly groupCallLocalStream: MediaStream | null;
+  readonly groupCallGroupId: string | null;
+  readonly groupCallTopology: CallTopology;
+  readonly joinGroupCall: (groupId: string) => void;
+  readonly leaveGroupCall: () => void;
+  readonly setGroupTopology: (groupId: string, topology: CallTopology) => void;
   readonly promoteMember: (groupId: string, username: string) => void;
   readonly demoteMember: (groupId: string, username: string) => void;
   readonly redactMessage: (target: ConversationTarget, targetId: string) => void;
@@ -780,6 +817,10 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
   const callRemoteStreamRef = useRef<MediaStream | null>(null);
   const pendingIceRef = useRef<RTCIceCandidate[]>([]);
   const pendingOfferSdpRef = useRef<string | null>(null);
+  // Group calls keep their own state and peer map; the 1:1 refs above are
+  // never touched by the group-call controller.
+  const [groupCall, setGroupCall] = useState<GroupCallSnapshot>(EMPTY_GROUP_CALL);
+  const groupCallRef = useRef<GroupCallController | null>(null);
   const stateRef = useRef(state);
   const pendingGuestRef = useRef<string | null>(null);
   // Kept in memory only — never persisted to storage.
@@ -831,6 +872,31 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
     if (!socket.connected) {
       socket.connect();
     }
+  }, []);
+
+  const ensureGroupCall = useCallback((): GroupCallController => {
+    let controller = groupCallRef.current;
+    if (controller === null) {
+      controller = createGroupCallController({
+        selfUserId: stateRef.current.user?.userId ?? '',
+        emit: (event, payload) => {
+          (socketRef.current.emit as (name: string, body: unknown) => void)(event, payload);
+        },
+        createPeerConnection,
+        getUserMedia: () => getUserMedia(true, true),
+        addTracks,
+        onChange: setGroupCall,
+        onError: showError,
+      });
+      groupCallRef.current = controller;
+    }
+    return controller;
+  }, [showError]);
+
+  const teardownGroupCall = useCallback(() => {
+    groupCallRef.current?.dispose();
+    groupCallRef.current = null;
+    setGroupCall(EMPTY_GROUP_CALL);
   }, []);
 
   const login = useCallback(
@@ -941,10 +1007,11 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
     dispatch({ type: 'CLEAR_TYPING' });
     pendingOps.clear();
     lastReceiptRef.current = {};
+    teardownGroupCall();
     socketRef.current.disconnect();
     e2eeRef.current = new E2eeSession();
     dispatch({ type: 'LOGOUT' });
-  }, [clearTypingTimers, pendingOps, stopTyping]);
+  }, [clearTypingTimers, pendingOps, stopTyping, teardownGroupCall]);
 
   // Highest timestamp of a message received from this peer (C2 upTo).
   const computeUpTo = useCallback((peer: string): number | undefined => {
@@ -1228,13 +1295,17 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
   );
 
   const createGroup = useCallback(
-    (name: string, members: readonly string[], description?: string, persistent?: boolean) => {
-      socketRef.current.emit(EVENTS.CLIENT.GROUP_CREATE, {
-        name,
-        members,
-        ...(description !== undefined && description.length > 0 ? { description } : {}),
-        ...(persistent === true ? { persistent: true } : {}),
-      });
+    (
+      name: string,
+      members: readonly string[],
+      description?: string,
+      persistent?: boolean,
+      topology?: CallTopology,
+    ) => {
+      socketRef.current.emit(
+        EVENTS.CLIENT.GROUP_CREATE,
+        buildGroupCreatePayload(name, members, description, persistent, topology),
+      );
     },
     [],
   );
@@ -1363,6 +1434,27 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
     pendingOfferSdpRef.current = null;
     pendingIceRef.current = [];
     dispatch({ type: 'SET_CALL_STATE', payload: { state: 'idle', peer: null } });
+  }, []);
+
+  const joinGroupCall = useCallback(
+    (groupId: string) => {
+      if (stateRef.current.callState !== 'idle') {
+        showError('End your current call first.');
+        return;
+      }
+      const group = stateRef.current.groups.find((g) => g.groupId === groupId);
+      if (group === undefined) return;
+      ensureGroupCall().join(groupId, group.topology);
+    },
+    [ensureGroupCall, showError],
+  );
+
+  const leaveGroupCall = useCallback(() => {
+    groupCallRef.current?.leave();
+  }, []);
+
+  const setGroupTopology = useCallback((groupId: string, topology: CallTopology) => {
+    socketRef.current.emit(EVENTS.CLIENT.GROUP_TOPOLOGY, { groupId, topology });
   }, []);
 
   const promoteMember = useCallback((groupId: string, username: string) => {
@@ -1643,6 +1735,9 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
       stopTyping();
       clearTypingTimers();
       dispatch({ type: 'CLEAR_TYPING' });
+      // The server drops our roster entry on disconnect, so tear down every
+      // peer connection and the local capture locally as well.
+      teardownGroupCall();
       dispatch({ type: 'SET_CONNECTION_STATUS', payload: 'disconnected' });
     };
 
@@ -2093,6 +2188,7 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
           groupId: payload.groupId,
           name: payload.name,
           description: payload.description,
+          ...(payload.topology !== undefined ? { topology: payload.topology } : {}),
         },
       });
     });
@@ -2164,6 +2260,29 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
       dispatch({ type: 'SET_CALL_STATE', payload: { state: 'idle', peer: null } });
     });
 
+    // ── Group call signaling (mesh + SFU credentials) ──
+    socket.on(EVENTS.SERVER.GROUP_CALL_ROSTER, (payload) => {
+      ensureGroupCall().roster(payload);
+    });
+    socket.on(EVENTS.SERVER.GROUP_CALL_JOINED, (payload) => {
+      void ensureGroupCall().joined(payload);
+    });
+    socket.on(EVENTS.SERVER.GROUP_CALL_LEFT, (payload) => {
+      ensureGroupCall().left(payload);
+    });
+    socket.on(EVENTS.SERVER.GROUP_CALL_OFFER, (payload) => {
+      void ensureGroupCall().offer(payload);
+    });
+    socket.on(EVENTS.SERVER.GROUP_CALL_ANSWER, (payload) => {
+      void ensureGroupCall().answer(payload);
+    });
+    socket.on(EVENTS.SERVER.GROUP_CALL_ICE, (payload) => {
+      void ensureGroupCall().ice(payload);
+    });
+    socket.on(EVENTS.SERVER.GROUP_CALL_SFU_CREDENTIALS, (payload) => {
+      void ensureGroupCall().sfuCredentials(payload);
+    });
+
     socket.connect();
 
     return () => {
@@ -2176,6 +2295,8 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
       window.removeEventListener('pagehide', handlePageHide);
       socket.removeAllListeners();
       socket.disconnect();
+      groupCallRef.current?.dispose();
+      groupCallRef.current = null;
       mediaTokenRef.current = null;
       clearMediaCache();
       clearTypingTimers();
@@ -2184,7 +2305,16 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
         errorTimerRef.current = null;
       }
     };
-  }, [clearTypingTimers, computeUpTo, runLatestPendingOp, sendReadReceipt, showError, stopTyping]);
+  }, [
+    clearTypingTimers,
+    computeUpTo,
+    ensureGroupCall,
+    runLatestPendingOp,
+    sendReadReceipt,
+    showError,
+    stopTyping,
+    teardownGroupCall,
+  ]);
 
   // One expiry sweeper per client (spec C): 10 s cadence over the public
   // purgeExpired seam; the cleanup is the interval's disposer.
@@ -2220,6 +2350,14 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
     acceptCall,
     rejectCall,
     endCall,
+    groupCallState: groupCall.state,
+    groupCallPeers: groupCall.peers,
+    groupCallLocalStream: groupCall.localStream,
+    groupCallGroupId: groupCall.groupId,
+    groupCallTopology: groupCall.topology,
+    joinGroupCall,
+    leaveGroupCall,
+    setGroupTopology,
     connectionStatus: state.connectionStatus,
     error: state.error,
     unread: state.unread,

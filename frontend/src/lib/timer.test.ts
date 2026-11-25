@@ -16,6 +16,8 @@ const GROUP: GroupInfo = {
   name: 'Team',
   description: '',
   disappearing: 0,
+  persistent: false,
+  topology: 'mesh',
   members: [],
   createdBy: 'alice',
   createdAt: 1,

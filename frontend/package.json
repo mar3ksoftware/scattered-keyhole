@@ -17,6 +17,7 @@
     "frimousse": "^0.3.0",
     "linkify-react": "^4.3.3",
     "linkifyjs": "^4.3.3",
+    "livekit-client": "^2.25.0",
     "mlkem": "^3.0.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
