@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, unlinkSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CONSTANTS } from './types';
 
@@ -40,9 +40,15 @@ export class MediaStore {
       if (opts?.wipeOnStartup === true) {
         try {
           for (const name of readdirSync(this.#diskDir)) {
-            try { unlinkSync(join(this.#diskDir, name)); } catch { /* ignore */ }
+            try {
+              unlinkSync(join(this.#diskDir, name));
+            } catch {
+              /* ignore */
+            }
           }
-        } catch { /* ignore */ }
+        } catch {
+          /* ignore */
+        }
       }
     }
 
@@ -73,7 +79,13 @@ export class MediaStore {
       this.#totalBytes -= entry.bytes.length;
       this.#fileCount -= 1;
       const p = this.#path(id);
-      if (p !== undefined) { try { unlinkSync(p); } catch { /* ignore */ } }
+      if (p !== undefined) {
+        try {
+          unlinkSync(p);
+        } catch {
+          /* ignore */
+        }
+      }
       return undefined;
     }
     return entry;
@@ -97,7 +109,11 @@ export class MediaStore {
 
     const p = this.#path(id);
     if (p !== undefined) {
-      try { writeFileSync(p, bytes); } catch { return 'quota_exceeded'; }
+      try {
+        writeFileSync(p, bytes);
+      } catch {
+        return 'quota_exceeded';
+      }
     }
 
     this.#entries.set(id, { bytes, createdAt: now });
@@ -111,7 +127,11 @@ export class MediaStore {
     if (entry === undefined) {
       const p = this.#path(id);
       if (p === undefined) return undefined;
-      try { return new Uint8Array(readFileSync(p)); } catch { return undefined; }
+      try {
+        return new Uint8Array(readFileSync(p));
+      } catch {
+        return undefined;
+      }
     }
     return entry.bytes;
   }
@@ -125,7 +145,13 @@ export class MediaStore {
         this.#totalBytes -= entry.bytes.length;
         this.#fileCount -= 1;
         const p = this.#path(id);
-        if (p !== undefined) { try { unlinkSync(p); } catch { /* ignore */ } }
+        if (p !== undefined) {
+          try {
+            unlinkSync(p);
+          } catch {
+            /* ignore */
+          }
+        }
         removed += 1;
       }
     }

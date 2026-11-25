@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { GroupId, GroupInfo, GroupMember, UserId, UserInfo } from './types';
+import type { CallTopology, GroupId, GroupInfo, GroupMember, UserId, UserInfo } from './types';
 import { GroupId as makeGroupId } from './types';
 
 export class GroupStore {
@@ -9,7 +9,13 @@ export class GroupStore {
     this.#groups = new Map();
   }
 
-  createGroup(name: string, creator: UserInfo, description = '', persistent = false): GroupInfo {
+  createGroup(
+    name: string,
+    creator: UserInfo,
+    description = '',
+    persistent = false,
+    topology: CallTopology = 'mesh',
+  ): GroupInfo {
     const groupId = makeGroupId(randomUUID());
     const creatorMember: GroupMember = {
       userId: creator.userId,
@@ -22,6 +28,7 @@ export class GroupStore {
       description,
       disappearing: 0,
       persistent,
+      topology,
       members: [creatorMember],
       createdBy: creator.userId,
       createdAt: Date.now(),
@@ -33,7 +40,11 @@ export class GroupStore {
   // Partial edit: only the provided fields change, the rest is carried over.
   updateGroup(
     groupId: GroupId,
-    patch: { readonly name?: string | undefined; readonly description?: string | undefined },
+    patch: {
+      readonly name?: string | undefined;
+      readonly description?: string | undefined;
+      readonly topology?: CallTopology | undefined;
+    },
   ): GroupInfo | undefined {
     const group = this.#groups.get(groupId);
     if (group === undefined) return undefined;
@@ -42,6 +53,7 @@ export class GroupStore {
       ...group,
       name: patch.name ?? group.name,
       description: patch.description ?? group.description,
+      topology: patch.topology ?? group.topology,
     };
     this.#groups.set(groupId, updated);
     return updated;
@@ -107,9 +119,7 @@ export class GroupStore {
 
     const updated: GroupInfo = {
       ...group,
-      members: group.members.map((m) =>
-        m.username === username ? { ...m, isAdmin } : m,
-      ),
+      members: group.members.map((m) => (m.username === username ? { ...m, isAdmin } : m)),
     };
     this.#groups.set(groupId, updated);
     return updated;

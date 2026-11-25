@@ -1,15 +1,18 @@
+import { AccessToken } from 'livekit-server-sdk';
 import type { Logger } from 'pino';
 import type { Server as IoServer, Socket } from 'socket.io';
 
 import type { AccountStore } from './account-store';
+import type { LivekitConfig } from './config';
 import type { DmSettingsStore } from './dm-settings-store';
+import { GroupCallRoster } from './group-call-roster';
 import type { GroupStore } from './group-store';
-import type { MessageStore } from './message-store';
 import type { KickVoteStore } from './kick-vote-store';
 import type { MediaAuth } from './media-auth';
-import type { TombstoneStore } from './tombstone-store';
+import type { MessageStore } from './message-store';
 import type { ProfileStore } from './profile-store';
 import type { RateLimiterRegistry } from './rate-limiter';
+import type { TombstoneStore } from './tombstone-store';
 import type {
   ClientToServerEvents,
   GroupInfo,
@@ -23,21 +26,26 @@ import { CONSTANTS, EVENTS, GroupId, UserId as makeUserId, SocketId } from './ty
 import type { UserDirectory } from './user-directory';
 import type { UserRegistry } from './user-registry';
 import {
+  validateCallAnswerPayload,
+  validateCallEndPayload,
+  validateCallIcePayload,
+  validateCallOfferPayload,
+  validateCallRejectPayload,
   validateDisappearingSetPayload,
   validateE2eePublicKeyPayload,
-  validateMlkemCiphertextPayload,
-  validateCallOfferPayload,
-  validateCallAnswerPayload,
-  validateCallIcePayload,
-  validateCallEndPayload,
-  validateCallRejectPayload,
+  validateGroupCallAnswerPayload,
+  validateGroupCallIcePayload,
+  validateGroupCallJoinPayload,
+  validateGroupCallLeavePayload,
+  validateGroupCallOfferPayload,
+  validateGroupCallSfuTokenPayload,
+  validateGroupCreatePayload,
   validateGroupKickResetPayload,
   validateGroupMemberDemotePayload,
   validateGroupMemberPromotePayload,
-  validateMessageRedactPayload,
-  validateGroupCreatePayload,
   validateGroupMessagePayload,
   validateGroupTargetPayload,
+  validateGroupTopologyPayload,
   validateGroupUpdatePayload,
   validateLoginPayload,
   validateMessageDeletePayload,
@@ -46,6 +54,8 @@ import {
   validateMessagePayload,
   validateMessagePinPayload,
   validateMessageReactPayload,
+  validateMessageRedactPayload,
+  validateMlkemCiphertextPayload,
   validatePollClosePayload,
   validatePollVotePayload,
   validateProfileUpdatePayload,
@@ -93,8 +103,13 @@ export function createServer(
   tombstoneStore: TombstoneStore,
   messageStore: MessageStore,
   logger: Logger,
+  livekit: LivekitConfig = { livekitUrl: null, livekitApiKey: null, livekitApiSecret: null },
 ): void {
   const pendingRegistrations = new Set<string>();
+
+  // Who is currently in a mesh call, per room. SFU rooms track membership on
+  // the media server, so nothing is recorded for them here.
+  const groupCallRoster = new GroupCallRoster();
 
   // Last relayed typing event per (sender, target, active). Duplicate bursts
   // inside the debounce window collapse; keys are pruned once the map grows.
@@ -115,6 +130,13 @@ export function createServer(
     })),
   });
 
+  // Roster entries only hold user ids; the group membership is the source of
+  // the display name, with the registry as a fallback for a just-left member.
+  const memberUsername = (group: GroupInfo, userId: UserId): string =>
+    group.members.find((member) => member.userId === userId)?.username ??
+    userRegistry.getUser(userId)?.username ??
+    String(userId);
+
   // Registry entries survive a transport drop for the 30s reattach window, but
   // they must not be advertised as online while their socket is gone.
   const getConnectedUsers = (): readonly UserInfo[] =>
@@ -127,10 +149,7 @@ export function createServer(
   // on active_groups, then re-receive the still-active ones.
   const sendSnapshots = (socket: TypedSocket, userId: UserId): void => {
     const userGroups = groupStore.getGroupsForUser(userId);
-    socket.emit(
-      EVENTS.SERVER.ACTIVE_GROUPS,
-      userGroups.map(withProfileGroup),
-    );
+    socket.emit(EVENTS.SERVER.ACTIVE_GROUPS, userGroups.map(withProfileGroup));
 
     // Persistent rooms: replay stored messages the user may have missed.
     for (const group of userGroups) {
@@ -549,7 +568,11 @@ export function createServer(
       if (sender === undefined) return;
       const target = userRegistry.getUserByUsername(valResult.data.to);
       if (target === undefined) return;
-      io.to(String(target.userId)).emit(EVENTS.SERVER.CALL_OFFER, { from: sender.userId, fromUsername: sender.username, sdp: valResult.data.sdp });
+      io.to(String(target.userId)).emit(EVENTS.SERVER.CALL_OFFER, {
+        from: sender.userId,
+        fromUsername: sender.username,
+        sdp: valResult.data.sdp,
+      });
     });
 
     socket.on(EVENTS.CLIENT.CALL_ANSWER, (payload) => {
@@ -559,7 +582,11 @@ export function createServer(
       if (sender === undefined) return;
       const target = userRegistry.getUserByUsername(valResult.data.to);
       if (target === undefined) return;
-      io.to(String(target.userId)).emit(EVENTS.SERVER.CALL_ANSWER, { from: sender.userId, fromUsername: sender.username, sdp: valResult.data.sdp });
+      io.to(String(target.userId)).emit(EVENTS.SERVER.CALL_ANSWER, {
+        from: sender.userId,
+        fromUsername: sender.username,
+        sdp: valResult.data.sdp,
+      });
     });
 
     socket.on(EVENTS.CLIENT.CALL_ICE, (payload) => {
@@ -569,7 +596,11 @@ export function createServer(
       if (sender === undefined) return;
       const target = userRegistry.getUserByUsername(valResult.data.to);
       if (target === undefined) return;
-      io.to(String(target.userId)).emit(EVENTS.SERVER.CALL_ICE, { from: sender.userId, fromUsername: sender.username, candidate: valResult.data.candidate });
+      io.to(String(target.userId)).emit(EVENTS.SERVER.CALL_ICE, {
+        from: sender.userId,
+        fromUsername: sender.username,
+        candidate: valResult.data.candidate,
+      });
     });
 
     socket.on(EVENTS.CLIENT.CALL_END, (payload) => {
@@ -579,7 +610,10 @@ export function createServer(
       if (sender === undefined) return;
       const target = userRegistry.getUserByUsername(valResult.data.to);
       if (target === undefined) return;
-      io.to(String(target.userId)).emit(EVENTS.SERVER.CALL_END, { from: sender.userId, fromUsername: sender.username });
+      io.to(String(target.userId)).emit(EVENTS.SERVER.CALL_END, {
+        from: sender.userId,
+        fromUsername: sender.username,
+      });
     });
 
     socket.on(EVENTS.CLIENT.CALL_REJECT, (payload) => {
@@ -589,7 +623,10 @@ export function createServer(
       if (sender === undefined) return;
       const target = userRegistry.getUserByUsername(valResult.data.to);
       if (target === undefined) return;
-      io.to(String(target.userId)).emit(EVENTS.SERVER.CALL_REJECT, { from: sender.userId, fromUsername: sender.username });
+      io.to(String(target.userId)).emit(EVENTS.SERVER.CALL_REJECT, {
+        from: sender.userId,
+        fromUsername: sender.username,
+      });
     });
 
     socket.on(EVENTS.CLIENT.GROUP_CREATE, (payload) => {
@@ -624,6 +661,7 @@ export function createServer(
         creator,
         valResult.data.description,
         valResult.data.persistent,
+        valResult.data.topology,
       );
 
       for (const invitee of invitees) {
@@ -684,6 +722,7 @@ export function createServer(
           groupId: valResult.data.groupId,
           name: updated.name,
           description: updated.description,
+          topology: updated.topology,
           u: sender.username,
           timestamp: Date.now(),
         });
@@ -1418,6 +1457,7 @@ export function createServer(
           groupId: valResult.data.groupId,
           name: updated.name,
           description: updated.description,
+          topology: updated.topology,
           u: sender.username,
           timestamp: Date.now(),
         });
@@ -1470,6 +1510,7 @@ export function createServer(
           groupId: valResult.data.groupId,
           name: updated.name,
           description: updated.description,
+          topology: updated.topology,
           u: sender.username,
           timestamp: Date.now(),
         });
@@ -1503,7 +1544,9 @@ export function createServer(
       if (resolved.conversation.kind === 'group') {
         const senderMember = resolved.conversation.members.find((m) => m.userId === sender.userId);
         if (senderMember?.isAdmin !== true) {
-          socket.emit(EVENTS.SERVER.MESSAGE_REJECTED, { reason: 'Only admins can delete others\' messages' });
+          socket.emit(EVENTS.SERVER.MESSAGE_REJECTED, {
+            reason: "Only admins can delete others' messages",
+          });
           return;
         }
       } else {
@@ -1512,16 +1555,24 @@ export function createServer(
         if (resolved.conversation.peer.userId !== sender.userId) {
           // allow only if sender is one of the two; redact of peer's own msg
           // in DM requires admin — none exists, so reject.
-          socket.emit(EVENTS.SERVER.MESSAGE_REJECTED, { reason: 'Only admins can delete others\' messages' });
+          socket.emit(EVENTS.SERVER.MESSAGE_REJECTED, {
+            reason: "Only admins can delete others' messages",
+          });
           return;
         }
       }
 
-      const tombstoneEntry: { messageId: string; timestamp: number; groupId?: string; to?: string } = {
+      const tombstoneEntry: {
+        messageId: string;
+        timestamp: number;
+        groupId?: string;
+        to?: string;
+      } = {
         messageId: valResult.data.targetId,
         timestamp: Date.now(),
       };
-      if (resolved.conversation.kind === 'group') tombstoneEntry.groupId = String(resolved.conversation.groupId);
+      if (resolved.conversation.kind === 'group')
+        tombstoneEntry.groupId = String(resolved.conversation.groupId);
       else tombstoneEntry.to = resolved.conversation.peer.username;
       tombstoneStore.create(tombstoneEntry);
 
@@ -1584,6 +1635,361 @@ export function createServer(
       logger.info({ groupId }, 'kick vote reset');
     });
 
+    // ── Group call topology + mesh signaling ─────────────────────────
+    socket.on(EVENTS.CLIENT.GROUP_TOPOLOGY, (payload) => {
+      const rlResult = rateLimiters.check(socket.id);
+      if (!rlResult.allowed) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Rate limit exceeded' });
+        return;
+      }
+
+      const valResult = validateGroupTopologyPayload(payload);
+      if (!valResult.success) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: valResult.errors.join(', ') });
+        return;
+      }
+
+      const sender = userRegistry.getUserBySocketId(SocketId(socket.id));
+      if (sender === undefined) return;
+
+      const groupId = GroupId(valResult.data.groupId);
+      const group = groupStore.getGroup(groupId);
+      if (group === undefined) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Group not found' });
+        return;
+      }
+
+      const senderMember = group.members.find((m) => m.userId === sender.userId);
+      if (senderMember?.isAdmin !== true) {
+        socket.emit(EVENTS.SERVER.ERROR, {
+          message: 'Only admins can change the call topology',
+        });
+        return;
+      }
+
+      const updated = groupStore.updateGroup(groupId, { topology: valResult.data.topology });
+      if (updated === undefined) return;
+
+      // Full-state apply, same as group:update: every member replaces the
+      // room metadata so the new topology shows up without a refetch.
+      for (const member of updated.members) {
+        io.to(String(member.userId)).emit(EVENTS.SERVER.GROUP_UPDATED, {
+          groupId: valResult.data.groupId,
+          name: updated.name,
+          description: updated.description,
+          topology: updated.topology,
+          u: sender.username,
+          timestamp: Date.now(),
+        });
+      }
+
+      // The notice spells out the security trade-off; it follows the room's
+      // resulting topology, so both switch directions read naturally.
+      const notice =
+        updated.topology === 'sfu'
+          ? 'Call topology switched to SFU: the server now forwards audio and video between participants (less secure than mesh).'
+          : 'Call topology switched to mesh: calls are now direct and end-to-end encrypted (an upgrade from SFU).';
+      for (const member of updated.members) {
+        io.to(String(member.userId)).emit(EVENTS.SERVER.NOTICE, { message: notice });
+      }
+
+      logger.info({ groupId, topology: updated.topology }, 'group topology updated');
+    });
+
+    socket.on(EVENTS.CLIENT.GROUP_CALL_JOIN, (payload) => {
+      const rlResult = rateLimiters.check(socket.id);
+      if (!rlResult.allowed) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Rate limit exceeded' });
+        return;
+      }
+
+      const valResult = validateGroupCallJoinPayload(payload);
+      if (!valResult.success) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: valResult.errors.join(', ') });
+        return;
+      }
+
+      const sender = userRegistry.getUserBySocketId(SocketId(socket.id));
+      if (sender === undefined) return;
+
+      const groupId = GroupId(valResult.data.groupId);
+      const group = groupStore.getGroup(groupId);
+      if (group === undefined) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Group not found' });
+        return;
+      }
+      if (!group.members.some((m) => m.userId === sender.userId)) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'You are not a member of this group' });
+        return;
+      }
+      if (group.topology !== 'mesh') {
+        socket.emit(EVENTS.SERVER.ERROR, { message: "This room's calls go through the SFU." });
+        return;
+      }
+
+      const peers = groupCallRoster.participants(groupId);
+      if (peers.includes(sender.userId)) {
+        // A repeated join is a reconnect, not a second participant: refresh
+        // the joiner's roster without re-announcing them.
+        socket.emit(EVENTS.SERVER.GROUP_CALL_ROSTER, {
+          groupId: String(groupId),
+          peers: peers
+            .filter((peerId) => peerId !== sender.userId)
+            .map((peerId) => ({ userId: peerId, username: memberUsername(group, peerId) })),
+        });
+        return;
+      }
+      if (groupCallRoster.size(groupId) >= CONSTANTS.MAX_MESH_CALL_PARTICIPANTS) {
+        socket.emit(EVENTS.SERVER.ERROR, {
+          message:
+            'This mesh call is full (6 participants max). Ask a group admin to switch this room to SFU for larger calls.',
+        });
+        return;
+      }
+
+      groupCallRoster.add(groupId, sender.userId);
+      socket.emit(EVENTS.SERVER.GROUP_CALL_ROSTER, {
+        groupId: String(groupId),
+        peers: peers.map((peerId) => ({
+          userId: peerId,
+          username: memberUsername(group, peerId),
+        })),
+      });
+
+      // Everyone else learns about the new participant so their UI can show
+      // the indicator; only clients already in the call answer with offers.
+      for (const member of group.members) {
+        if (member.userId === sender.userId) continue;
+        io.to(String(member.userId)).emit(EVENTS.SERVER.GROUP_CALL_JOINED, {
+          groupId: String(groupId),
+          from: sender.userId,
+          fromUsername: sender.username,
+        });
+      }
+
+      logger.info({ groupId, userId: sender.userId }, 'group call joined');
+    });
+
+    socket.on(EVENTS.CLIENT.GROUP_CALL_LEAVE, (payload) => {
+      const rlResult = rateLimiters.check(socket.id);
+      if (!rlResult.allowed) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Rate limit exceeded' });
+        return;
+      }
+
+      const valResult = validateGroupCallLeavePayload(payload);
+      if (!valResult.success) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: valResult.errors.join(', ') });
+        return;
+      }
+
+      const sender = userRegistry.getUserBySocketId(SocketId(socket.id));
+      if (sender === undefined) return;
+
+      const groupId = GroupId(valResult.data.groupId);
+      const group = groupStore.getGroup(groupId);
+      if (group === undefined) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Group not found' });
+        return;
+      }
+      if (!group.members.some((m) => m.userId === sender.userId)) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'You are not a member of this group' });
+        return;
+      }
+
+      if (!groupCallRoster.remove(groupId, sender.userId)) return;
+
+      for (const member of group.members) {
+        io.to(String(member.userId)).emit(EVENTS.SERVER.GROUP_CALL_LEFT, {
+          groupId: String(groupId),
+          from: sender.userId,
+          fromUsername: sender.username,
+        });
+      }
+
+      logger.info({ groupId, userId: sender.userId }, 'group call left');
+    });
+
+    socket.on(EVENTS.CLIENT.GROUP_CALL_OFFER, (payload) => {
+      const rlResult = rateLimiters.check(socket.id);
+      if (!rlResult.allowed) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Rate limit exceeded' });
+        return;
+      }
+
+      const valResult = validateGroupCallOfferPayload(payload);
+      if (!valResult.success) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: valResult.errors.join(', ') });
+        return;
+      }
+
+      const sender = userRegistry.getUserBySocketId(SocketId(socket.id));
+      if (sender === undefined) return;
+
+      const groupId = GroupId(valResult.data.groupId);
+      const group = groupStore.getGroup(groupId);
+      if (group === undefined) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Group not found' });
+        return;
+      }
+      if (!group.members.some((m) => m.userId === sender.userId)) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'You are not a member of this group' });
+        return;
+      }
+
+      const target = userRegistry.getUserByUsername(valResult.data.to);
+      if (target === undefined) return;
+
+      io.to(String(target.userId)).emit(EVENTS.SERVER.GROUP_CALL_OFFER, {
+        groupId: String(groupId),
+        from: sender.userId,
+        fromUsername: sender.username,
+        sdp: valResult.data.sdp,
+      });
+    });
+
+    socket.on(EVENTS.CLIENT.GROUP_CALL_ANSWER, (payload) => {
+      const rlResult = rateLimiters.check(socket.id);
+      if (!rlResult.allowed) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Rate limit exceeded' });
+        return;
+      }
+
+      const valResult = validateGroupCallAnswerPayload(payload);
+      if (!valResult.success) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: valResult.errors.join(', ') });
+        return;
+      }
+
+      const sender = userRegistry.getUserBySocketId(SocketId(socket.id));
+      if (sender === undefined) return;
+
+      const groupId = GroupId(valResult.data.groupId);
+      const group = groupStore.getGroup(groupId);
+      if (group === undefined) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Group not found' });
+        return;
+      }
+      if (!group.members.some((m) => m.userId === sender.userId)) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'You are not a member of this group' });
+        return;
+      }
+
+      const target = userRegistry.getUserByUsername(valResult.data.to);
+      if (target === undefined) return;
+
+      io.to(String(target.userId)).emit(EVENTS.SERVER.GROUP_CALL_ANSWER, {
+        groupId: String(groupId),
+        from: sender.userId,
+        fromUsername: sender.username,
+        sdp: valResult.data.sdp,
+      });
+    });
+
+    socket.on(EVENTS.CLIENT.GROUP_CALL_ICE, (payload) => {
+      const rlResult = rateLimiters.check(socket.id);
+      if (!rlResult.allowed) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Rate limit exceeded' });
+        return;
+      }
+
+      const valResult = validateGroupCallIcePayload(payload);
+      if (!valResult.success) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: valResult.errors.join(', ') });
+        return;
+      }
+
+      const sender = userRegistry.getUserBySocketId(SocketId(socket.id));
+      if (sender === undefined) return;
+
+      const groupId = GroupId(valResult.data.groupId);
+      const group = groupStore.getGroup(groupId);
+      if (group === undefined) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Group not found' });
+        return;
+      }
+      if (!group.members.some((m) => m.userId === sender.userId)) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'You are not a member of this group' });
+        return;
+      }
+
+      const target = userRegistry.getUserByUsername(valResult.data.to);
+      if (target === undefined) return;
+
+      io.to(String(target.userId)).emit(EVENTS.SERVER.GROUP_CALL_ICE, {
+        groupId: String(groupId),
+        from: sender.userId,
+        fromUsername: sender.username,
+        candidate: valResult.data.candidate,
+      });
+    });
+
+    socket.on(EVENTS.CLIENT.GROUP_CALL_SFU_TOKEN, async (payload) => {
+      const rlResult = rateLimiters.check(socket.id);
+      if (!rlResult.allowed) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Rate limit exceeded' });
+        return;
+      }
+
+      const valResult = validateGroupCallSfuTokenPayload(payload);
+      if (!valResult.success) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: valResult.errors.join(', ') });
+        return;
+      }
+
+      const sender = userRegistry.getUserBySocketId(SocketId(socket.id));
+      if (sender === undefined) return;
+
+      const groupId = GroupId(valResult.data.groupId);
+      const group = groupStore.getGroup(groupId);
+      if (group === undefined || !group.members.some((m) => m.userId === sender.userId)) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'You are not a member of this group' });
+        return;
+      }
+      if (group.topology !== 'sfu') {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'This room uses mesh calls.' });
+        return;
+      }
+      if (
+        livekit.livekitUrl === null ||
+        livekit.livekitApiKey === null ||
+        livekit.livekitApiSecret === null
+      ) {
+        socket.emit(EVENTS.SERVER.ERROR, {
+          message: 'SFU calls are not configured on this server.',
+        });
+        return;
+      }
+
+      try {
+        // Identity stays the opaque userId (LiveKit advises against PII there);
+        // the human-readable username rides along as the display name.
+        const token = new AccessToken(livekit.livekitApiKey, livekit.livekitApiSecret, {
+          identity: String(sender.userId),
+          name: sender.username,
+          ttl: '1h',
+        });
+        token.addGrant({
+          room: `group_${groupId}`,
+          roomJoin: true,
+          canPublish: true,
+          canSubscribe: true,
+        });
+        const jwt = await token.toJwt();
+        socket.emit(EVENTS.SERVER.GROUP_CALL_SFU_CREDENTIALS, {
+          groupId: String(groupId),
+          url: livekit.livekitUrl,
+          token: jwt,
+        });
+        logger.info({ groupId }, 'sfu token issued');
+      } catch (err) {
+        logger.error({ groupId, err }, 'sfu token mint failed');
+        socket.emit(EVENTS.SERVER.ERROR, {
+          message: 'SFU calls are not configured on this server.',
+        });
+      }
+    });
+
     socket.on('disconnect', (reason: string) => {
       rateLimiters.remove(socket.id);
 
@@ -1593,6 +1999,20 @@ export function createServer(
       }
 
       const payload = { userId: user.userId, username: user.username };
+
+      // A dropped socket ends every mesh call the user was in, whether the
+      // disconnect was announced or not; peers must stop waiting for media.
+      for (const groupId of groupCallRoster.removeEverywhere(user.userId)) {
+        const group = groupStore.getGroup(groupId);
+        if (group === undefined) continue;
+        for (const member of group.members) {
+          io.to(String(member.userId)).emit(EVENTS.SERVER.GROUP_CALL_LEFT, {
+            groupId: String(groupId),
+            from: user.userId,
+            fromUsername: user.username,
+          });
+        }
+      }
 
       if (reason === 'client namespace disconnect') {
         userRegistry.removeUserBySocketId(SocketId(socket.id));

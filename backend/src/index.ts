@@ -4,17 +4,17 @@ import { Server } from 'socket.io';
 import { AccountStore } from './account-store';
 import { config } from './config';
 import { DmSettingsStore } from './dm-settings-store';
-import { MessageStore } from './message-store';
 import { GroupStore } from './group-store';
 import { KickVoteStore } from './kick-vote-store';
-import { TombstoneStore } from './tombstone-store';
 import { logger } from './logger';
 import { MediaAuth } from './media-auth';
 import { createMediaHttpHandler } from './media-http';
 import { MediaStore } from './media-store';
+import { MessageStore } from './message-store';
 import { ProfileStore } from './profile-store';
 import { RateLimiterRegistry } from './rate-limiter';
 import { createServer } from './server';
+import { TombstoneStore } from './tombstone-store';
 import type { ClientToServerEvents, ServerToClientEvents } from './types';
 import { UserDirectory } from './user-directory';
 import { UserRegistry } from './user-registry';
@@ -74,6 +74,11 @@ createServer(
   tombstoneStore,
   messageStore,
   logger,
+  {
+    livekitUrl: config.livekitUrl,
+    livekitApiKey: config.livekitApiKey,
+    livekitApiSecret: config.livekitApiSecret,
+  },
 );
 
 const handler = engine.handler();

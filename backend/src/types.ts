@@ -97,11 +97,100 @@ export type CallIcePayload = { readonly to: string; readonly candidate: string }
 export type CallEndPayload = { readonly to: string };
 export type CallRejectPayload = { readonly to: string };
 
-export type CallOfferRelay = { readonly from: UserId; readonly fromUsername: string; readonly sdp: string };
-export type CallAnswerRelay = { readonly from: UserId; readonly fromUsername: string; readonly sdp: string };
-export type CallIceRelay = { readonly from: UserId; readonly fromUsername: string; readonly candidate: string };
+export type CallOfferRelay = {
+  readonly from: UserId;
+  readonly fromUsername: string;
+  readonly sdp: string;
+};
+export type CallAnswerRelay = {
+  readonly from: UserId;
+  readonly fromUsername: string;
+  readonly sdp: string;
+};
+export type CallIceRelay = {
+  readonly from: UserId;
+  readonly fromUsername: string;
+  readonly candidate: string;
+};
 export type CallEndRelay = { readonly from: UserId; readonly fromUsername: string };
 export type CallRejectRelay = { readonly from: UserId; readonly fromUsername: string };
+
+// ── Group call signaling payloads ──
+// Group calls reuse the 1:1 SDP/ICE wire shapes but carry the room they
+// belong to, so relays stay scoped to one group.
+export type GroupTopologyPayload = {
+  readonly groupId: string;
+  readonly topology: CallTopology;
+};
+
+export type GroupCallJoinPayload = { readonly groupId: string };
+export type GroupCallLeavePayload = { readonly groupId: string };
+export type GroupCallSfuTokenPayload = { readonly groupId: string };
+
+export type GroupCallOfferPayload = {
+  readonly groupId: string;
+  readonly to: string;
+  readonly sdp: string;
+};
+export type GroupCallAnswerPayload = {
+  readonly groupId: string;
+  readonly to: string;
+  readonly sdp: string;
+};
+export type GroupCallIcePayload = {
+  readonly groupId: string;
+  readonly to: string;
+  readonly candidate: string;
+};
+
+export type GroupCallPeer = {
+  readonly userId: UserId;
+  readonly username: string;
+};
+
+export type GroupCallRosterPayload = {
+  readonly groupId: string;
+  readonly peers: readonly GroupCallPeer[];
+};
+
+export type GroupCallJoinedPayload = {
+  readonly groupId: string;
+  readonly from: UserId;
+  readonly fromUsername: string;
+};
+
+export type GroupCallLeftPayload = {
+  readonly groupId: string;
+  readonly from: UserId;
+  readonly fromUsername: string;
+};
+
+export type GroupCallOfferRelay = {
+  readonly groupId: string;
+  readonly from: UserId;
+  readonly fromUsername: string;
+  readonly sdp: string;
+};
+
+export type GroupCallAnswerRelay = {
+  readonly groupId: string;
+  readonly from: UserId;
+  readonly fromUsername: string;
+  readonly sdp: string;
+};
+
+export type GroupCallIceRelay = {
+  readonly groupId: string;
+  readonly from: UserId;
+  readonly fromUsername: string;
+  readonly candidate: string;
+};
+
+export type SfuCredentialsPayload = {
+  readonly groupId: string;
+  readonly url: string;
+  readonly token: string;
+};
 
 export type RegisterPayload = {
   readonly username: string;
@@ -153,12 +242,17 @@ export type GroupMember = {
   readonly status?: string;
 };
 
+// Mesh keeps media peer-to-peer; SFU forwards it through the media server.
+// The choice is per room and admin-controlled.
+export type CallTopology = 'mesh' | 'sfu';
+
 export type GroupInfo = {
   readonly groupId: GroupId;
   readonly name: string;
   readonly description: string;
   readonly disappearing: number;
   readonly persistent: boolean;
+  readonly topology: CallTopology;
   readonly members: readonly GroupMember[];
   readonly createdBy: UserId;
   readonly createdAt: number;
@@ -342,6 +436,7 @@ export type GroupUpdatedPayload = {
   readonly groupId: string;
   readonly name: string;
   readonly description: string;
+  readonly topology: CallTopology;
   readonly u: string;
   readonly timestamp: number;
 };
@@ -466,6 +561,9 @@ export const CONSTANTS = {
   TOMBSTONE_CAP: 1000,
   TOMBSTONE_TTL_MS: 24 * 60 * 60 * 1000,
   TOMBSTONE_SWEEP_INTERVAL_MS: 30_000,
+  // Mesh calls fan out every stream to every peer, so the room size is capped
+  // where upload bandwidth stops being the bottleneck; larger rooms use SFU.
+  MAX_MESH_CALL_PARTICIPANTS: 6,
 } as const;
 
 // ── Event name map ────────────────────────────────────────────────────
@@ -503,6 +601,13 @@ export const EVENTS = {
     GROUP_MEMBER_DEMOTE: 'group:member:demote',
     MESSAGE_REDACT: 'message:redact',
     GROUP_KICK_RESET: 'group:kick:reset',
+    GROUP_TOPOLOGY: 'group:topology',
+    GROUP_CALL_JOIN: 'group_call:join',
+    GROUP_CALL_LEAVE: 'group_call:leave',
+    GROUP_CALL_OFFER: 'group_call:offer',
+    GROUP_CALL_ANSWER: 'group_call:answer',
+    GROUP_CALL_ICE: 'group_call:ice',
+    GROUP_CALL_SFU_TOKEN: 'group_call:sfu_token',
   },
   SERVER: {
     USER_JOINED: 'user:joined',
@@ -544,6 +649,13 @@ export const EVENTS = {
     MESSAGE_PINNED: 'message:pinned',
     DISAPPEARING_CHANGED: 'disappearing:changed',
     NOTICE: 'notice',
+    GROUP_CALL_ROSTER: 'group_call:roster',
+    GROUP_CALL_JOINED: 'group_call:joined',
+    GROUP_CALL_LEFT: 'group_call:left',
+    GROUP_CALL_OFFER: 'group_call:offer',
+    GROUP_CALL_ANSWER: 'group_call:answer',
+    GROUP_CALL_ICE: 'group_call:ice',
+    GROUP_CALL_SFU_CREDENTIALS: 'group_call:sfu_credentials',
   },
 } as const;
 
@@ -597,6 +709,13 @@ export type ServerToClientEvents = {
   readonly [EVENTS.SERVER.MESSAGE_PINNED]: (payload: MessagePinnedPayload) => void;
   readonly [EVENTS.SERVER.DISAPPEARING_CHANGED]: (payload: DisappearingChangedPayload) => void;
   readonly [EVENTS.SERVER.NOTICE]: (payload: NoticePayload) => void;
+  readonly [EVENTS.SERVER.GROUP_CALL_ROSTER]: (payload: GroupCallRosterPayload) => void;
+  readonly [EVENTS.SERVER.GROUP_CALL_JOINED]: (payload: GroupCallJoinedPayload) => void;
+  readonly [EVENTS.SERVER.GROUP_CALL_LEFT]: (payload: GroupCallLeftPayload) => void;
+  readonly [EVENTS.SERVER.GROUP_CALL_OFFER]: (payload: GroupCallOfferRelay) => void;
+  readonly [EVENTS.SERVER.GROUP_CALL_ANSWER]: (payload: GroupCallAnswerRelay) => void;
+  readonly [EVENTS.SERVER.GROUP_CALL_ICE]: (payload: GroupCallIceRelay) => void;
+  readonly [EVENTS.SERVER.GROUP_CALL_SFU_CREDENTIALS]: (payload: SfuCredentialsPayload) => void;
 };
 
 export type ClientToServerEvents = {
@@ -635,6 +754,13 @@ export type ClientToServerEvents = {
   readonly [EVENTS.CLIENT.GROUP_MEMBER_DEMOTE]: (payload: GroupTargetPayload) => void;
   readonly [EVENTS.CLIENT.MESSAGE_REDACT]: (payload: MessageDeletePayload) => void;
   readonly [EVENTS.CLIENT.GROUP_KICK_RESET]: (payload: GroupTargetPayload) => void;
+  readonly [EVENTS.CLIENT.GROUP_TOPOLOGY]: (payload: GroupTopologyPayload) => void;
+  readonly [EVENTS.CLIENT.GROUP_CALL_JOIN]: (payload: GroupCallJoinPayload) => void;
+  readonly [EVENTS.CLIENT.GROUP_CALL_LEAVE]: (payload: GroupCallLeavePayload) => void;
+  readonly [EVENTS.CLIENT.GROUP_CALL_OFFER]: (payload: GroupCallOfferPayload) => void;
+  readonly [EVENTS.CLIENT.GROUP_CALL_ANSWER]: (payload: GroupCallAnswerPayload) => void;
+  readonly [EVENTS.CLIENT.GROUP_CALL_ICE]: (payload: GroupCallIcePayload) => void;
+  readonly [EVENTS.CLIENT.GROUP_CALL_SFU_TOKEN]: (payload: GroupCallSfuTokenPayload) => void;
 };
 
 // ── Utility ───────────────────────────────────────────────────────────

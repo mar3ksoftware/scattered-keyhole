@@ -79,7 +79,11 @@ export class TombstoneStore {
         if (filter === undefined) return true;
         if (filter.groupId !== undefined && e.groupId !== filter.groupId) return false;
         if (filter.to !== undefined && e.to !== filter.to) return false;
-        if (filter.conversationKey !== undefined && this.#conversationKey(e) !== filter.conversationKey) return false;
+        if (
+          filter.conversationKey !== undefined &&
+          this.#conversationKey(e) !== filter.conversationKey
+        )
+          return false;
         return true;
       })
       .map((e) => ({ ...e }));
