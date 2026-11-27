@@ -39,7 +39,11 @@ List<GroupInfo> applyGroupUpdated(
   if (index == -1) return groups;
   final current = groups[index];
   final next = List<GroupInfo>.of(groups);
-  next[index] = current.copyWith(name: update.name, description: update.description);
+  next[index] = current.copyWith(
+    name: update.name,
+    description: update.description,
+    topology: update.topology,
+  );
   return next;
 }
 

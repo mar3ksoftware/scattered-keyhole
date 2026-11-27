@@ -3,6 +3,7 @@ export 'call.dart';
 export 'e2ee.dart';
 export 'errors.dart';
 export 'group.dart';
+export 'group_call.dart';
 export 'json_utils.dart';
 export 'media.dart';
 export 'message.dart';

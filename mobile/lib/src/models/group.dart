@@ -1,3 +1,4 @@
+import 'group_call.dart';
 import 'json_utils.dart';
 
 /// A member entry inside a [GroupInfo].
@@ -60,6 +61,7 @@ class GroupInfo {
     this.description = '',
     this.disappearing = 0,
     this.persistent = false,
+    this.topology = CallTopology.mesh,
   });
 
   factory GroupInfo.fromJson(Map<String, dynamic> json) {
@@ -76,6 +78,7 @@ class GroupInfo {
           : '',
       disappearing: readInt(json['disappearing']),
       persistent: json['persistent'] == true,
+      topology: CallTopology.normalize(json['topology']),
     );
   }
 
@@ -93,6 +96,10 @@ class GroupInfo {
 
   /// Whether messages in this room persist across server restarts (Tier-7).
   final bool persistent;
+
+  /// Per-room call topology: [CallTopology.mesh] (default) or
+  /// [CallTopology.sfu]. Older servers omit it and normalise to mesh.
+  final String topology;
 
   List<String> get memberUsernames =>
       members.map((member) => member.username).toList(growable: false);
@@ -113,6 +120,7 @@ class GroupInfo {
     'description': description,
     'disappearing': disappearing,
     'persistent': persistent,
+    'topology': topology,
   };
 
   GroupInfo copyWith({
@@ -124,6 +132,7 @@ class GroupInfo {
     String? description,
     int? disappearing,
     bool? persistent,
+    String? topology,
   }) {
     return GroupInfo(
       groupId: groupId ?? this.groupId,
@@ -134,6 +143,7 @@ class GroupInfo {
       description: description ?? this.description,
       disappearing: disappearing ?? this.disappearing,
       persistent: persistent ?? this.persistent,
+      topology: topology ?? this.topology,
     );
   }
 
@@ -147,6 +157,7 @@ class GroupInfo {
         other.description == description &&
         other.disappearing == disappearing &&
         other.persistent == persistent &&
+        other.topology == topology &&
         _membersEqual(other.members, members);
   }
 
@@ -167,13 +178,20 @@ class GroupInfo {
     description,
     disappearing,
     persistent,
+    topology,
     Object.hashAll(members),
   );
 }
 
 /// Outbound `group:create` payload.
 class GroupCreatePayload {
-  const GroupCreatePayload({required this.name, required this.members, this.description = '', this.persistent = false});
+  const GroupCreatePayload({
+    required this.name,
+    required this.members,
+    this.description = '',
+    this.persistent = false,
+    this.topology = CallTopology.mesh,
+  });
 
   factory GroupCreatePayload.fromJson(Map<String, dynamic> json) {
     return GroupCreatePayload(
@@ -185,6 +203,7 @@ class GroupCreatePayload {
           ? json['description'] as String
           : '',
       persistent: json['persistent'] == true,
+      topology: CallTopology.normalize(json['topology']),
     );
   }
 
@@ -197,11 +216,15 @@ class GroupCreatePayload {
   /// Whether messages in this room persist across server restarts (Tier-7).
   final bool persistent;
 
+  /// Initial call topology; omitted from the wire when mesh (server default).
+  final String topology;
+
   Map<String, dynamic> toJson() => <String, dynamic>{
     'name': name,
     'members': members,
     if (description.isNotEmpty) 'description': description,
     if (persistent) 'persistent': true,
+    if (topology == CallTopology.sfu) 'topology': topology,
   };
 }
 
@@ -380,6 +403,7 @@ class GroupUpdatedPayload {
     required this.description,
     required this.u,
     required this.timestamp,
+    this.topology,
   });
 
   factory GroupUpdatedPayload.fromJson(Map<String, dynamic> json) {
@@ -391,6 +415,9 @@ class GroupUpdatedPayload {
           : '',
       u: readString(json['u']),
       timestamp: readInt(json['timestamp']),
+      topology: json['topology'] is String
+          ? CallTopology.normalize(json['topology'])
+          : null,
     );
   }
 
@@ -401,4 +428,7 @@ class GroupUpdatedPayload {
   /// Username of the admin who made the change.
   final String u;
   final int timestamp;
+
+  /// Optional new topology; absent on older servers (keep the current one).
+  final String? topology;
 }
