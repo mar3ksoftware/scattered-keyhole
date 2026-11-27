@@ -53,7 +53,8 @@ class FakeCallTransport implements CallTransport {
   }
 
   @override
-  Future<void> addTracks() async => log.add('addTracks');
+  Future<void> addTracks({MediaStream? stream}) async =>
+      log.add(stream == null ? 'addTracks' : 'addTracks:shared');
 
   @override
   Future<String> createOffer() async {
