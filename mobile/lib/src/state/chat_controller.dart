@@ -19,8 +19,10 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart' show MediaStream;
 
 import '../calls/call_transport.dart';
+import '../calls/sfu_transport.dart';
 import '../crypto/e2ee.dart';
 import '../crypto/e2ee_session.dart';
 import '../crypto/media_crypto.dart';
@@ -140,8 +142,10 @@ class ChatController extends ChangeNotifier {
     this.typingRepeatDelay = const Duration(milliseconds: 4000),
     this.typingHideDelay = const Duration(milliseconds: 6000),
     CallTransport Function()? callTransportFactory,
+    SfuTransport Function()? sfuTransportFactory,
   })  : _e2ee = e2ee ?? E2eeSession(),
-        _callTransportFactory = callTransportFactory ?? WebRtcCallTransport.new {
+        _callTransportFactory = callTransportFactory ?? WebRtcCallTransport.new,
+        _sfuTransportFactory = sfuTransportFactory ?? defaultSfuTransport {
     _listen();
     connect();
   }
@@ -189,6 +193,10 @@ class ChatController extends ChangeNotifier {
   /// Builds the media transport for each call. Tests inject a fake here;
   /// production uses the `flutter_webrtc` implementation.
   final CallTransport Function() _callTransportFactory;
+
+  /// Builds the SFU room transport for `sfu`-topology group calls. Tests
+  /// inject a fake so no LiveKit platform channel is opened.
+  final SfuTransport Function() _sfuTransportFactory;
 
   /// Default typing hide window, in milliseconds (spec C1: 6 s).
   static const int typingHideMs = 6000;
@@ -305,6 +313,43 @@ class ChatController extends ChangeNotifier {
   /// Whether the peer connection has a remote description yet — the gate for
   /// applying candidates immediately instead of queueing them.
   bool _callRemoteDescriptionSet = false;
+
+  // ── Group call state (mesh + SFU) ─────────────────────────────────────
+
+  GroupCallState _groupCallState = GroupCallState.idle;
+  String? _groupCallId;
+  String _groupCallTopology = CallTopology.mesh;
+
+  /// Participants keyed by wire userId (the identity inbound relays carry).
+  final Map<String, GroupCallParticipant> _groupCallParticipants =
+      <String, GroupCallParticipant>{};
+
+  /// One peer connection per participant, keyed the same way.
+  final Map<String, CallTransport> _groupCallTransports =
+      <String, CallTransport>{};
+
+  /// Transport that owns the shared capture stream for every mesh peer
+  /// connection. Closed once, on leave, so peer teardown never stops the
+  /// tracks the others still use.
+  CallTransport? _groupCallCapture;
+
+  /// Peers whose remote description is applied; ICE waits until then.
+  final Set<String> _groupCallRemoteReady = <String>{};
+
+  /// Candidates that arrived before their peer's remote description.
+  final Map<String, List<String>> _groupCallPendingIce =
+      <String, List<String>>{};
+
+  /// Peers that announced themselves while our roster was still in flight.
+  /// They are absent from that snapshot, so we offer to them on activation.
+  final Set<String> _groupCallLateJoiners = <String>{};
+
+  /// Live SFU room for `sfu`-topology calls; null for mesh.
+  SfuTransport? _sfu;
+
+  /// Usernames of the mesh peers currently in the call, used as the outbound
+  /// `to` field (the server resolves it with `getUserByUsername`).
+  final Map<String, String> _groupCallUsernames = <String, String>{};
 
   // ── Getters ────────────────────────────────────────────────────────────
 
@@ -528,6 +573,7 @@ class ChatController extends ChangeNotifier {
     _stopTypingBurst();
     _clearTypingIndicators();
     unawaited(_cleanupCall());
+    unawaited(_cleanupGroupCall());
     _socket.disconnect();
     _e2ee = E2eeSession();
     _users.clear();
@@ -596,8 +642,20 @@ class ChatController extends ChangeNotifier {
   }
 
   /// Sends `group:create`.
-  void createGroup(String name, List<String> members, {bool persistent = false}) {
-    _socket.sendGroupCreate(GroupCreatePayload(name: name, members: members, persistent: persistent));
+  void createGroup(
+    String name,
+    List<String> members, {
+    bool persistent = false,
+    String topology = CallTopology.mesh,
+  }) {
+    _socket.sendGroupCreate(
+      GroupCreatePayload(
+        name: name,
+        members: members,
+        persistent: persistent,
+        topology: CallTopology.normalize(topology),
+      ),
+    );
   }
 
   /// Sends `group:update` (metadata). No optimistic apply: the server relays
@@ -1311,6 +1369,10 @@ class ChatController extends ChangeNotifier {
   /// call per peer pair at a time.
   Future<void> startCall(String peer) async {
     if (_callState != CallState.idle || peer.isEmpty) return;
+    if (_groupCallState != GroupCallState.idle) {
+      _showError('End your current call first.');
+      return;
+    }
 
     final transport = _callTransportFactory();
     _call = transport;
@@ -1351,6 +1413,10 @@ class ChatController extends ChangeNotifier {
   /// queued candidates, then answers and moves to `connected`.
   Future<void> acceptCall() async {
     if (_callState != CallState.incoming) return;
+    if (_groupCallState != GroupCallState.idle) {
+      _showError('End your current call first.');
+      return;
+    }
     final peer = _callPeer;
     if (peer == null) return;
 
@@ -1493,6 +1559,438 @@ class ChatController extends ChangeNotifier {
       await transport.close();
     } catch (_) {
       // Nothing left to release if the platform already closed it.
+    }
+  }
+
+  // ── Group calls (mesh + SFU) ───────────────────────────────────────────
+  //
+  // Mesh signaling follows the frozen contract: existing participants always
+  // offer to a joiner, the joiner always answers, and candidates queue per
+  // peer until that peer's remote description exists. `sfu` rooms skip mesh
+  // entirely — the client asks for LiveKit credentials and joins the room.
+
+  GroupCallState get groupCallState => _groupCallState;
+
+  /// Group the current call belongs to, or null while idle.
+  String? get groupCallId => _groupCallId;
+
+  /// `mesh` or `sfu` for the current call (or the last one while idle).
+  String get groupCallTopology => _groupCallTopology;
+
+  /// Live SFU room handle; null for mesh calls or while idle.
+  SfuTransport? get groupCallSfu => _sfu;
+
+  /// Mesh participants (SFU rooms report through [groupCallSfuParticipants]).
+  List<GroupCallParticipant> get groupCallParticipants {
+    if (_groupCallTopology == CallTopology.sfu) {
+      final sfu = _sfu;
+      if (sfu == null) return const <GroupCallParticipant>[];
+      return <GroupCallParticipant>[
+        for (final participant in sfu.participants)
+          GroupCallParticipant(
+            userId: participant.identity,
+            username: participant.name,
+          ),
+      ];
+    }
+    return List<GroupCallParticipant>.unmodifiable(
+      _groupCallParticipants.values,
+    );
+  }
+
+  /// Shared capture stream for mesh peer connections; null until captured.
+  MediaStream? get groupCallLocalStream => _groupCallCapture?.localStream;
+
+  /// Transport backing one mesh peer tile; null for SFU rooms.
+  CallTransport? groupCallTransportFor(String userId) =>
+      _groupCallTransports[userId];
+
+  /// Starts a group call in [groupId], or surfaces the 1:1 conflict guard.
+  Future<void> joinGroupCall(String groupId) async {
+    if (_groupCallState != GroupCallState.idle || groupId.isEmpty) return;
+    if (_callState != CallState.idle) {
+      _showError('End your current call first.');
+      return;
+    }
+
+    GroupInfo? group;
+    for (final candidate in _groups) {
+      if (candidate.groupId == groupId) {
+        group = candidate;
+        break;
+      }
+    }
+    final topology = group?.topology ?? CallTopology.mesh;
+
+    _groupCallState = GroupCallState.joining;
+    _groupCallId = groupId;
+    _groupCallTopology = topology;
+    _groupCallParticipants.clear();
+    _groupCallUsernames.clear();
+    _groupCallTransports.clear();
+    _groupCallRemoteReady.clear();
+    _groupCallPendingIce.clear();
+    _groupCallLateJoiners.clear();
+    _notify();
+
+    if (topology == CallTopology.sfu) {
+      _socket.sendGroupCallSfuToken(GroupCallSfuTokenPayload(groupId: groupId));
+    } else {
+      _socket.sendGroupCallJoin(GroupCallJoinPayload(groupId: groupId));
+    }
+  }
+
+  /// Leaves the current group call (mesh) or disposes the SFU room.
+  void leaveGroupCall() {
+    if (_groupCallState == GroupCallState.idle) return;
+    final groupId = _groupCallId;
+    if (groupId != null && _groupCallTopology == CallTopology.mesh) {
+      _socket.sendGroupCallLeave(GroupCallLeavePayload(groupId: groupId));
+    }
+    unawaited(_cleanupGroupCall());
+  }
+
+  /// Asks the server to switch the room's topology (admin only server-side).
+  void setGroupTopology(String groupId, String topology) {
+    _socket.sendGroupTopology(
+      GroupTopologyPayload(
+        groupId: groupId,
+        topology: CallTopology.normalize(topology),
+      ),
+    );
+  }
+
+  Future<void> _handleGroupCallRoster(GroupCallRosterPayload payload) async {
+    if (payload.groupId != _groupCallId) return;
+    if (_groupCallTopology != CallTopology.mesh) return;
+
+    final me = _me?.userId;
+    final next = <String, GroupCallParticipant>{};
+    for (final peer in payload.peers) {
+      if (peer.userId == me) continue;
+      next[peer.userId] = GroupCallParticipant(
+        userId: peer.userId,
+        username: peer.username,
+      );
+      _groupCallUsernames[peer.userId] = peer.username;
+    }
+
+    // Peers that announced themselves while this roster was in flight are not
+    // part of the snapshot; keep them so the offer pass below reaches them.
+    final lateJoiners = List<String>.of(_groupCallLateJoiners);
+    _groupCallLateJoiners.clear();
+    for (final userId in lateJoiners) {
+      final existing = _groupCallParticipants[userId];
+      if (existing != null) next[userId] = existing;
+    }
+
+    for (final userId in _groupCallTransports.keys.toList()) {
+      if (next.containsKey(userId)) continue;
+      final transport = _groupCallTransports.remove(userId);
+      _groupCallRemoteReady.remove(userId);
+      _groupCallPendingIce.remove(userId);
+      if (transport != null) unawaited(transport.close());
+    }
+
+    _groupCallParticipants
+      ..clear()
+      ..addAll(next);
+    _groupCallState = GroupCallState.active;
+    _notify();
+
+    // The joiner answers incoming offers; capture once up front so the first
+    // answer can publish media without a second signaling round-trip.
+    await _ensureGroupCapture();
+
+    // Two clients can join inside one round trip: the later joiner is absent
+    // from this snapshot, so offer to them now that we are active.
+    for (final userId in lateJoiners) {
+      if (!_groupCallParticipants.containsKey(userId)) continue;
+      if (_groupCallState != GroupCallState.active) return;
+      await _offerToGroupPeer(userId);
+    }
+  }
+
+  Future<void> _handleGroupCallJoined(GroupCallJoinedPayload payload) async {
+    if (payload.groupId != _groupCallId) return;
+    if (payload.from == _me?.userId) return;
+    if (_groupCallState == GroupCallState.idle) return;
+    if (_groupCallTopology != CallTopology.mesh) return;
+
+    _groupCallParticipants[payload.from] = GroupCallParticipant(
+      userId: payload.from,
+      username: payload.fromUsername,
+    );
+    _groupCallUsernames[payload.from] = payload.fromUsername;
+    _notify();
+
+    if (_groupCallState != GroupCallState.active) {
+      // Our roster has not landed yet, so it cannot list this peer. Remember
+      // them and offer as soon as the server activates the call.
+      _groupCallLateJoiners.add(payload.from);
+      return;
+    }
+
+    // Frozen glare rule: existing participants always offer to the newcomer.
+    await _offerToGroupPeer(payload.from);
+  }
+
+  Future<void> _handleGroupCallOffer(GroupCallOfferRelay relay) async {
+    if (relay.groupId != _groupCallId) return;
+    if (_groupCallState != GroupCallState.active) return;
+    if (_groupCallTopology != CallTopology.mesh) return;
+
+    _groupCallParticipants[relay.from] = GroupCallParticipant(
+      userId: relay.from,
+      username: relay.fromUsername,
+    );
+    _groupCallUsernames[relay.from] = relay.fromUsername;
+    _notify();
+
+    var transport = _groupCallTransports[relay.from];
+    if (transport == null) {
+      final created = _callTransportFactory();
+      _groupCallTransports[relay.from] = created;
+      final peerUserId = relay.from;
+      final peerUsername = relay.fromUsername;
+      try {
+        await created.createPeerConnection(
+          onIceCandidate: (candidateJson) {
+            if (!identical(_groupCallTransports[peerUserId], created)) return;
+            _socket.sendGroupCallIce(
+              GroupCallIcePayload(
+                groupId: _groupCallId!,
+                to: peerUsername,
+                candidate: candidateJson,
+              ),
+            );
+          },
+          onTrack: _notify,
+          onConnectionStateChange: (_) {},
+        );
+        final stream = await _ensureGroupCapture();
+        await created.addTracks(stream: stream);
+      } catch (_) {
+        _groupCallTransports.remove(peerUserId);
+        unawaited(created.close());
+        return;
+      }
+      transport = created;
+    }
+
+    try {
+      await transport.setRemoteDescription('offer', relay.sdp);
+      _groupCallRemoteReady.add(relay.from);
+      await _flushGroupIce(relay.from);
+      final answer = await transport.createAnswer();
+      await transport.setLocalDescription('answer', answer);
+      if (!identical(_groupCallTransports[relay.from], transport)) return;
+      _socket.sendGroupCallAnswer(
+        GroupCallAnswerPayload(
+          groupId: _groupCallId!,
+          to: relay.fromUsername,
+          sdp: answer,
+        ),
+      );
+    } catch (_) {
+      // A malformed offer is dropped; the peer retries or leaves.
+    }
+  }
+
+  Future<void> _handleGroupCallAnswer(GroupCallAnswerRelay relay) async {
+    if (relay.groupId != _groupCallId || relay.sdp.isEmpty) return;
+    final transport = _groupCallTransports[relay.from];
+    if (transport == null) return;
+    try {
+      await transport.setRemoteDescription('answer', relay.sdp);
+      _groupCallRemoteReady.add(relay.from);
+      await _flushGroupIce(relay.from);
+    } catch (_) {
+      // A rejected answer leaves the offer outstanding; `left` cleans up.
+    }
+  }
+
+  Future<void> _handleGroupCallIce(GroupCallIceRelay relay) async {
+    if (relay.groupId != _groupCallId || relay.candidate.isEmpty) return;
+    final transport = _groupCallTransports[relay.from];
+    if (transport == null || !_groupCallRemoteReady.contains(relay.from)) {
+      (_groupCallPendingIce[relay.from] ??= <String>[]).add(relay.candidate);
+      return;
+    }
+    try {
+      await transport.addIceCandidate(relay.candidate);
+    } catch (_) {
+      // Stale candidates must not break the call.
+    }
+  }
+
+  void _handleGroupCallLeft(GroupCallLeftPayload payload) {
+    if (payload.groupId != _groupCallId) return;
+    if (payload.from == _me?.userId) {
+      unawaited(_cleanupGroupCall());
+      return;
+    }
+    final transport = _groupCallTransports.remove(payload.from);
+    _groupCallParticipants.remove(payload.from);
+    _groupCallUsernames.remove(payload.from);
+    _groupCallRemoteReady.remove(payload.from);
+    _groupCallPendingIce.remove(payload.from);
+    _groupCallLateJoiners.remove(payload.from);
+    if (transport != null) unawaited(transport.close());
+    _notify();
+  }
+
+  Future<void> _handleGroupCallSfuCredentials(
+    SfuCredentialsPayload payload,
+  ) async {
+    if (payload.groupId != _groupCallId) return;
+    if (_groupCallState == GroupCallState.idle) return;
+    if (_groupCallTopology != CallTopology.sfu || _sfu != null) return;
+
+    final sfu = _sfuTransportFactory();
+    _sfu = sfu;
+    sfu.onChanged = _notify;
+    try {
+      await sfu.connect(payload.url, payload.token);
+      if (!identical(_sfu, sfu)) {
+        await sfu.dispose();
+        return;
+      }
+      _groupCallState = GroupCallState.active;
+      _notify();
+    } catch (_) {
+      if (identical(_sfu, sfu)) {
+        _sfu = null;
+        await sfu.dispose();
+        await _cleanupGroupCall();
+        _showError('Could not join the group call.');
+      }
+    }
+  }
+
+  /// Creates one mesh peer connection and sends it an offer.
+  Future<void> _offerToGroupPeer(String userId) async {
+    final username = _groupCallUsernames[userId];
+    if (username == null) return;
+    if (_groupCallTransports.containsKey(userId)) return;
+
+    final transport = _callTransportFactory();
+    _groupCallTransports[userId] = transport;
+    try {
+      await transport.createPeerConnection(
+        onIceCandidate: (candidateJson) {
+          if (!identical(_groupCallTransports[userId], transport)) return;
+          _socket.sendGroupCallIce(
+            GroupCallIcePayload(
+              groupId: _groupCallId!,
+              to: username,
+              candidate: candidateJson,
+            ),
+          );
+        },
+        onTrack: _notify,
+        onConnectionStateChange: (_) {},
+      );
+      final stream = await _ensureGroupCapture();
+      await transport.addTracks(stream: stream);
+      final offer = await transport.createOffer();
+      await transport.setLocalDescription('offer', offer);
+      if (!identical(_groupCallTransports[userId], transport)) return;
+      _socket.sendGroupCallOffer(
+        GroupCallOfferPayload(
+          groupId: _groupCallId!,
+          to: username,
+          sdp: offer,
+        ),
+      );
+    } catch (_) {
+      final stale = _groupCallTransports.remove(userId);
+      if (stale != null) unawaited(stale.close());
+      _showError('Could not start the group call.');
+    }
+  }
+
+  /// Captures mic and camera once per group call and shares the stream across
+  /// every peer connection. Returns null when capture failed (and the call was
+  /// torn down).
+  Future<MediaStream?> _ensureGroupCapture() async {
+    final existing = _groupCallCapture;
+    // The transport only exists after a successful getUserMedia, so its
+    // presence is the capture flag even when the platform reports no stream.
+    if (existing != null) return existing.localStream;
+
+    final capture = _callTransportFactory();
+    _groupCallCapture = capture;
+    try {
+      await capture.getUserMedia(audio: true, video: true);
+    } catch (_) {
+      if (identical(_groupCallCapture, capture)) _groupCallCapture = null;
+      try {
+        await capture.close();
+      } catch (_) {
+        // Nothing left to release.
+      }
+      _showError('Could not start the group call.');
+      unawaited(_cleanupGroupCall());
+      return null;
+    }
+    return capture.localStream;
+  }
+
+  Future<void> _flushGroupIce(String userId) async {
+    final pending = _groupCallPendingIce.remove(userId);
+    if (pending == null || pending.isEmpty) return;
+    final transport = _groupCallTransports[userId];
+    if (transport == null) return;
+    for (final candidate in pending) {
+      try {
+        await transport.addIceCandidate(candidate);
+      } catch (_) {
+        // Skip candidates the platform rejects; the rest still apply.
+      }
+    }
+  }
+
+  /// Releases every group-call resource and returns to idle synchronously
+  /// before awaiting the teardown.
+  Future<void> _cleanupGroupCall() async {
+    final transports = List<CallTransport>.of(_groupCallTransports.values);
+    final capture = _groupCallCapture;
+    final sfu = _sfu;
+
+    _groupCallTransports.clear();
+    _groupCallCapture = null;
+    _sfu = null;
+    _groupCallParticipants.clear();
+    _groupCallUsernames.clear();
+    _groupCallRemoteReady.clear();
+    _groupCallPendingIce.clear();
+    _groupCallLateJoiners.clear();
+    _groupCallState = GroupCallState.idle;
+    _groupCallId = null;
+    _groupCallTopology = CallTopology.mesh;
+    _notify();
+
+    for (final transport in transports) {
+      try {
+        await transport.close();
+      } catch (_) {
+        // Already closed.
+      }
+    }
+    if (capture != null) {
+      try {
+        await capture.close();
+      } catch (_) {
+        // Already closed.
+      }
+    }
+    if (sfu != null) {
+      try {
+        await sfu.dispose();
+      } catch (_) {
+        // Best-effort teardown.
+      }
     }
   }
 
@@ -2245,6 +2743,13 @@ class ChatController extends ChangeNotifier {
       _socket.onCallIce(_handleCallIce),
       _socket.onCallEnd(_handleCallHangup),
       _socket.onCallReject(_handleCallHangup),
+      _socket.onGroupCallRoster(_handleGroupCallRoster),
+      _socket.onGroupCallJoined(_handleGroupCallJoined),
+      _socket.onGroupCallLeft(_handleGroupCallLeft),
+      _socket.onGroupCallOffer(_handleGroupCallOffer),
+      _socket.onGroupCallAnswer(_handleGroupCallAnswer),
+      _socket.onGroupCallIce(_handleGroupCallIce),
+      _socket.onGroupCallSfuCredentials(_handleGroupCallSfuCredentials),
     ]);
   }
 
@@ -2274,6 +2779,9 @@ class ChatController extends ChangeNotifier {
     // Indicators can't survive a dead socket; drop local typing state too.
     _stopTypingBurst();
     _clearTypingIndicators();
+    // The server drops our roster entry on disconnect, so a live group call
+    // cannot continue either; release media without emitting a leave.
+    if (_groupCallState != GroupCallState.idle) unawaited(_cleanupGroupCall());
     _notify();
   }
 

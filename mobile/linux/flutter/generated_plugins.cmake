@@ -4,6 +4,7 @@
 
 list(APPEND FLUTTER_PLUGIN_LIST
   flutter_webrtc
+  livekit_client
   media_kit_libs_linux
   record_linux
 )
