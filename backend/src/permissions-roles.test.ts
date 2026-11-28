@@ -57,7 +57,7 @@ async function connect(c: TestClient) {
 }
 function waitEvent<T>(c: TestClient, ev: string, ms = 5000): Promise<T> {
   return new Promise<T>((res, rej) => {
-    const t = setTimeout(() => rej(new Error('timeout ' + ev)), ms);
+    const t = setTimeout(() => rej(new Error(`timeout ${ev}`)), ms);
     c.once(ev, (p: T) => {
       clearTimeout(t);
       res(p);

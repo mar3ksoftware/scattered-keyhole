@@ -62,8 +62,8 @@ test('save/load round-trips every field under a versioned key', () => {
   assert.deepEqual(loadAudioSettings(storage), MUSIC_SETTINGS);
   const raw = storage.data[AUDIO_SETTINGS_STORAGE_KEY] ?? '';
   const parsed = JSON.parse(raw) as Record<string, unknown>;
-  assert.equal(parsed['v'], 1);
-  assert.equal(parsed['bitrate'], 'music');
+  assert.equal(parsed.v, 1);
+  assert.equal(parsed.bitrate, 'music');
 });
 
 test('corrupt or foreign storage payloads fall back to defaults', () => {

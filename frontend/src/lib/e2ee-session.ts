@@ -279,7 +279,7 @@ export class E2eeSession {
     const peerKey = this.#peerPublicKeys.get(peerUsername);
     if (peerKey === undefined) return null;
     const ownKey = await this.getPublicKey();
-    const combined = new TextEncoder().encode(ownKey + ':' + peerKey);
+    const combined = new TextEncoder().encode(`${ownKey}:${peerKey}`);
     const hash = await crypto.subtle.digest('SHA-256', combined);
     const hex = Array.from(new Uint8Array(hash))
       .map((b) => b.toString(16).padStart(2, '0'))
