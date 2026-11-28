@@ -14,7 +14,6 @@ let socket: TypedSocket | undefined;
 
 export function getSocket(): TypedSocket {
   if (socket === undefined) {
-    // biome-ignore lint/complexity/useLiteralKeys: Vite env index sig
     const url = import.meta.env['VITE_API_URL'] as string | undefined;
     socket = io(url, {
       autoConnect: false,

@@ -317,7 +317,6 @@ function readImageSize(
 }
 
 function apiBase(): string {
-  // biome-ignore lint/complexity/useLiteralKeys: Vite env index sig
   return (import.meta.env['VITE_API_URL'] as string | undefined) ?? '';
 }
 
