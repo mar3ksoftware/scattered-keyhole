@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useChat } from '../context/ChatContext';
 import { conversationKeyFor } from '../lib/conversation';
 import { replyExcerptFor } from '../lib/envelope';
 import { isAdminOf } from '../lib/permissions';
 import type { ConversationTarget, ReplyRef } from '../types';
+import { CallMuteButton } from './CallMuteButton';
 import { ChatHeader } from './ChatHeader';
 import { EditGroupModal } from './EditGroupModal';
 import { GroupCallControls } from './GroupCallControls';
@@ -19,6 +20,46 @@ type ChatAreaProps = {
   readonly onBack?: (() => void) | undefined;
   readonly showBack?: boolean | undefined;
 };
+
+type SinkableAudio = HTMLAudioElement & {
+  readonly setSinkId?: (deviceId: string) => Promise<void>;
+};
+
+// Plays the remote 1:1 track and routes it to the chosen output device.
+// MediaStream.setSinkId is not implemented anywhere yet, so the sink lives on
+// the <audio> element that actually renders the stream.
+function RemoteCallAudio({
+  stream,
+  sinkId,
+}: {
+  readonly stream: MediaStream | null;
+  readonly sinkId: string | null;
+}) {
+  const ref = useRef<HTMLAudioElement | null>(null);
+
+  useEffect(() => {
+    const element = ref.current;
+    if (element !== null) element.srcObject = stream;
+    return () => {
+      if (element !== null) element.srcObject = null;
+    };
+  }, [stream]);
+
+  useEffect(() => {
+    const element = ref.current as SinkableAudio | null;
+    if (element !== null && sinkId !== null && typeof element.setSinkId === 'function') {
+      void element.setSinkId(sinkId).catch(() => undefined);
+    }
+  }, [sinkId]);
+
+  if (stream === null) return null;
+  return (
+    <>
+      {/* biome-ignore lint/a11y/useMediaCaption: live call audio has no caption track */}
+      <audio ref={ref} autoPlay playsInline className="hidden" />
+    </>
+  );
+}
 
 export function ChatArea({ selectedUser, selectedGroup, onBack, showBack }: ChatAreaProps) {
   const {
@@ -47,6 +88,10 @@ export function ChatArea({ selectedUser, selectedGroup, onBack, showBack }: Chat
     getSafetyNumber,
     callState,
     callPeer,
+    callMuted,
+    callRemoteStream,
+    toggleCallMute,
+    audioSettings,
     startCall,
     acceptCall,
     rejectCall,
@@ -216,6 +261,7 @@ export function ChatArea({ selectedUser, selectedGroup, onBack, showBack }: Chat
 
   return (
     <div className="relative flex flex-col h-full bg-zinc-950">
+      <RemoteCallAudio stream={callRemoteStream} sinkId={audioSettings.outputDeviceId} />
       <ChatHeader
         username={displayName}
         subtitle={subtitle}
@@ -277,13 +323,16 @@ export function ChatArea({ selectedUser, selectedGroup, onBack, showBack }: Chat
           )}
           {callState === 'calling' && <span className="text-xs text-zinc-400">Calling…</span>}
           {callState === 'connected' && (
-            <button
-              type="button"
-              onClick={endCall}
-              className="text-xs text-rose-400 hover:text-rose-300"
-            >
-              End call
-            </button>
+            <>
+              <CallMuteButton muted={callMuted} onToggle={toggleCallMute} />
+              <button
+                type="button"
+                onClick={endCall}
+                className="text-xs text-rose-400 hover:text-rose-300"
+              >
+                End call
+              </button>
+            </>
           )}
           {safetyNumber !== null && (
             <p className="mt-1 text-[10px] font-mono text-zinc-400 break-all">{safetyNumber}</p>

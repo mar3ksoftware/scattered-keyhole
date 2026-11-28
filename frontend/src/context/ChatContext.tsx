@@ -8,6 +8,15 @@ import {
   useRef,
   useState,
 } from 'react';
+import {
+  type AudioSettings,
+  applyBitrateToConnection,
+  applyStreamSink,
+  buildAudioConstraints,
+  loadAudioSettings,
+  sanitizeAudioSettings,
+  saveAudioSettings,
+} from '../lib/audioSettings';
 import { addTracks, createPeerConnection, getUserMedia } from '../lib/calls';
 import { conversationKeyFor, conversationKeyOfMessage, relayKeyFor } from '../lib/conversation';
 import { E2eeSession } from '../lib/e2ee-session';
@@ -31,6 +40,7 @@ import { mentionsMe } from '../lib/mentions';
 import { createPendingOps } from '../lib/pending-ops';
 import { applyPin, clearPinForMessage, pinTargetState } from '../lib/pins';
 import { validateProfile } from '../lib/profile';
+import { createPttController, isTypingTarget, type PttController } from '../lib/ptt';
 import { purgeExpired, shouldStoreAtIngestion, startPurgeInterval } from '../lib/purge';
 import { getSocket } from '../lib/socket';
 import { applyDisappearing, isPresetSeconds, timerSecondsOf } from '../lib/timer';
@@ -730,6 +740,13 @@ export type ChatContextValue = {
   readonly acceptCall: () => void;
   readonly rejectCall: () => void;
   readonly endCall: () => void;
+  // ── Audio settings (roadmap 8c) ──
+  // Preferences, not chat data: persisted under `sk.audioSettings`.
+  readonly audioSettings: AudioSettings;
+  readonly updateAudioSettings: (patch: Partial<AudioSettings>) => void;
+  readonly callMuted: boolean;
+  readonly toggleCallMute: () => void;
+  readonly callRemoteStream: MediaStream | null;
   // ── Group calls ──
   readonly groupCallState: GroupCallPhase;
   readonly groupCallPeers: readonly GroupCallPeer[];
@@ -817,6 +834,14 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
   const callRemoteStreamRef = useRef<MediaStream | null>(null);
   const pendingIceRef = useRef<RTCIceCandidate[]>([]);
   const pendingOfferSdpRef = useRef<string | null>(null);
+  // Audio preferences are device-local (never chat data). The ref mirror lets
+  // the call callbacks read the latest values without re-binding.
+  const [audioSettings, setAudioSettings] = useState<AudioSettings>(() => loadAudioSettings());
+  const audioSettingsRef = useRef(audioSettings);
+  const [callMuted, setCallMutedState] = useState(false);
+  const callMutedRef = useRef(false);
+  const [callRemoteStream, setCallRemoteStream] = useState<MediaStream | null>(null);
+  const pttRef = useRef<PttController | null>(null);
   // Group calls keep their own state and peer map; the 1:1 refs above are
   // never touched by the group-call controller.
   const [groupCall, setGroupCall] = useState<GroupCallSnapshot>(EMPTY_GROUP_CALL);
@@ -847,6 +872,7 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
   const runLatestPendingOp = pendingOps.runLatest;
 
   stateRef.current = state;
+  audioSettingsRef.current = audioSettings;
 
   // Protocol v1 (Tier-6 PQ): which side encapsulates the ML-KEM key is
   // decided by comparing usernames, so the E2EE session must know ours as
@@ -1333,44 +1359,137 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
     socketRef.current.emit(EVENTS.CLIENT.GROUP_KICK_VOTE, { groupId, username });
   }, []);
 
-  const startCall = useCallback(async (peerUsername: string) => {
-    dispatch({ type: 'SET_CALL_STATE', payload: { state: 'calling', peer: peerUsername } });
-    try {
-      const stream = await getUserMedia(true, true);
-      callLocalStreamRef.current = stream;
-      const pc = createPeerConnection({
-        onIceCandidate: (c) => {
-          socketRef.current.emit(EVENTS.CLIENT.CALL_ICE, {
-            to: peerUsername,
-            candidate: JSON.stringify(c),
-          });
-        },
-        onTrack: (s) => {
-          callRemoteStreamRef.current = s;
-        },
-        onConnectionStateChange: (st) => {
-          if (st === 'disconnected' || st === 'failed' || st === 'closed') {
-            dispatch({ type: 'SET_CALL_STATE', payload: { state: 'idle', peer: null } });
-          }
-        },
-      });
-      addTracks(pc, stream);
-      callPcRef.current = pc;
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      socketRef.current.emit(EVENTS.CLIENT.CALL_OFFER, { to: peerUsername, sdp: offer.sdp ?? '' });
-    } catch {
-      dispatch({ type: 'SET_CALL_STATE', payload: { state: 'idle', peer: null } });
+  // ── Audio settings + PTT/PTM (roadmap 8c) ──
+  // Single place that mirrors mute state onto the live local audio tracks.
+  const applyMuteToLocalStream = useCallback((muted: boolean) => {
+    callMutedRef.current = muted;
+    const stream = callLocalStreamRef.current;
+    if (stream !== null) {
+      for (const track of stream.getAudioTracks()) track.enabled = !muted;
     }
+    setCallMutedState(muted);
   }, []);
+
+  const toggleCallMute = useCallback(() => {
+    const controller = pttRef.current;
+    if (controller !== null) {
+      // With PTT/PTM bound the toggle sets the baseline; the key adds to it.
+      controller.toggleManualMuted();
+      return;
+    }
+    applyMuteToLocalStream(!callMutedRef.current);
+  }, [applyMuteToLocalStream]);
+
+  // Persist, then push the change into a call that is already running.
+  const updateAudioSettings = useCallback((patch: Partial<AudioSettings>) => {
+    const next = sanitizeAudioSettings({ ...audioSettingsRef.current, ...patch });
+    audioSettingsRef.current = next;
+    saveAudioSettings(next);
+    setAudioSettings(next);
+    const track = callLocalStreamRef.current?.getAudioTracks()[0];
+    if (track !== undefined) {
+      void track.applyConstraints(buildAudioConstraints(next)).catch(() => undefined);
+    }
+    const pc = callPcRef.current;
+    if (pc !== null) void applyBitrateToConnection(pc, next.bitrate);
+    applyStreamSink(callRemoteStreamRef.current, next.outputDeviceId);
+    pttRef.current?.setBindings(next.pttKey, next.ptmKey);
+  }, []);
+
+  const teardownCallAudio = useCallback(() => {
+    pttRef.current = null;
+    applyMuteToLocalStream(false);
+    callRemoteStreamRef.current = null;
+    setCallRemoteStream(null);
+  }, [applyMuteToLocalStream]);
+
+  // Focused-tab PTT/PTM: the browser only delivers key events to the active
+  // tab, so these listeners exist only while a 1:1 call is live.
+  useEffect(() => {
+    if (state.callState !== 'calling' && state.callState !== 'connected') return;
+    let created = pttRef.current;
+    if (created === null) {
+      created = createPttController({
+        pttKey: audioSettingsRef.current.pttKey,
+        ptmKey: audioSettingsRef.current.ptmKey,
+        manualMuted: callMutedRef.current,
+        onChange: (snapshot) => applyMuteToLocalStream(snapshot.muted),
+      });
+      pttRef.current = created;
+    }
+    const controller = created;
+    applyMuteToLocalStream(controller.snapshot().muted);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (isTypingTarget(event.target)) return;
+      if (controller.keyDown(event.code, event.repeat)) event.preventDefault();
+    };
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (controller.keyUp(event.code)) event.preventDefault();
+    };
+    const onBlur = () => controller.releaseAll();
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', onBlur);
+    };
+  }, [state.callState, applyMuteToLocalStream]);
+
+  const startCall = useCallback(
+    async (peerUsername: string) => {
+      dispatch({ type: 'SET_CALL_STATE', payload: { state: 'calling', peer: peerUsername } });
+      try {
+        const settings = audioSettingsRef.current;
+        const stream = await getUserMedia(buildAudioConstraints(settings), true);
+        callLocalStreamRef.current = stream;
+        applyMuteToLocalStream(pttRef.current?.snapshot().muted ?? false);
+        const pc = createPeerConnection({
+          onIceCandidate: (c) => {
+            socketRef.current.emit(EVENTS.CLIENT.CALL_ICE, {
+              to: peerUsername,
+              candidate: JSON.stringify(c),
+            });
+          },
+          onTrack: (s) => {
+            callRemoteStreamRef.current = s;
+            setCallRemoteStream(s);
+            applyStreamSink(s, audioSettingsRef.current.outputDeviceId);
+          },
+          onConnectionStateChange: (st) => {
+            if (st === 'disconnected' || st === 'failed' || st === 'closed') {
+              teardownCallAudio();
+              dispatch({ type: 'SET_CALL_STATE', payload: { state: 'idle', peer: null } });
+            }
+          },
+        });
+        addTracks(pc, stream);
+        void applyBitrateToConnection(pc, settings.bitrate);
+        callPcRef.current = pc;
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        socketRef.current.emit(EVENTS.CLIENT.CALL_OFFER, {
+          to: peerUsername,
+          sdp: offer.sdp ?? '',
+        });
+      } catch {
+        teardownCallAudio();
+        dispatch({ type: 'SET_CALL_STATE', payload: { state: 'idle', peer: null } });
+      }
+    },
+    [applyMuteToLocalStream, teardownCallAudio],
+  );
 
   const acceptCall = useCallback(async () => {
     const peer = stateRef.current.callPeer;
     if (peer === null) return;
     const offerSdp = pendingOfferSdpRef.current;
     try {
-      const stream = await getUserMedia(true, true);
+      const settings = audioSettingsRef.current;
+      const stream = await getUserMedia(buildAudioConstraints(settings), true);
       callLocalStreamRef.current = stream;
+      applyMuteToLocalStream(pttRef.current?.snapshot().muted ?? false);
       const pc = createPeerConnection({
         onIceCandidate: (c) => {
           socketRef.current.emit(EVENTS.CLIENT.CALL_ICE, {
@@ -1380,14 +1499,18 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
         },
         onTrack: (s) => {
           callRemoteStreamRef.current = s;
+          setCallRemoteStream(s);
+          applyStreamSink(s, audioSettingsRef.current.outputDeviceId);
         },
         onConnectionStateChange: (st) => {
           if (st === 'disconnected' || st === 'failed' || st === 'closed') {
+            teardownCallAudio();
             dispatch({ type: 'SET_CALL_STATE', payload: { state: 'idle', peer: null } });
           }
         },
       });
       addTracks(pc, stream);
+      void applyBitrateToConnection(pc, settings.bitrate);
       callPcRef.current = pc;
       if (offerSdp) {
         await pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: offerSdp }));
@@ -1399,9 +1522,10 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
       socketRef.current.emit(EVENTS.CLIENT.CALL_ANSWER, { to: peer, sdp: answer.sdp ?? '' });
       dispatch({ type: 'SET_CALL_STATE', payload: { state: 'connected', peer } });
     } catch {
+      teardownCallAudio();
       dispatch({ type: 'SET_CALL_STATE', payload: { state: 'idle', peer: null } });
     }
-  }, []);
+  }, [applyMuteToLocalStream, teardownCallAudio]);
 
   const rejectCall = useCallback(() => {
     const peer = stateRef.current.callPeer;
@@ -1414,10 +1538,11 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
       for (const t of callLocalStreamRef.current.getTracks()) t.stop();
       callLocalStreamRef.current = null;
     }
+    teardownCallAudio();
     pendingOfferSdpRef.current = null;
     pendingIceRef.current = [];
     dispatch({ type: 'SET_CALL_STATE', payload: { state: 'idle', peer: null } });
-  }, []);
+  }, [teardownCallAudio]);
 
   const endCall = useCallback(() => {
     const peer = stateRef.current.callPeer;
@@ -1430,11 +1555,11 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
       for (const t of callLocalStreamRef.current.getTracks()) t.stop();
       callLocalStreamRef.current = null;
     }
-    callRemoteStreamRef.current = null;
+    teardownCallAudio();
     pendingOfferSdpRef.current = null;
     pendingIceRef.current = [];
     dispatch({ type: 'SET_CALL_STATE', payload: { state: 'idle', peer: null } });
-  }, []);
+  }, [teardownCallAudio]);
 
   const joinGroupCall = useCallback(
     (groupId: string) => {
@@ -2242,6 +2367,7 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
         for (const t of callLocalStreamRef.current.getTracks()) t.stop();
         callLocalStreamRef.current = null;
       }
+      teardownCallAudio();
       pendingOfferSdpRef.current = null;
       pendingIceRef.current = [];
       dispatch({ type: 'SET_CALL_STATE', payload: { state: 'idle', peer: null } });
@@ -2255,6 +2381,7 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
         for (const t of callLocalStreamRef.current.getTracks()) t.stop();
         callLocalStreamRef.current = null;
       }
+      teardownCallAudio();
       pendingOfferSdpRef.current = null;
       pendingIceRef.current = [];
       dispatch({ type: 'SET_CALL_STATE', payload: { state: 'idle', peer: null } });
@@ -2313,6 +2440,7 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
     sendReadReceipt,
     showError,
     stopTyping,
+    teardownCallAudio,
     teardownGroupCall,
   ]);
 
@@ -2350,6 +2478,11 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
     acceptCall,
     rejectCall,
     endCall,
+    audioSettings,
+    updateAudioSettings,
+    callMuted,
+    toggleCallMute,
+    callRemoteStream,
     groupCallState: groupCall.state,
     groupCallPeers: groupCall.peers,
     groupCallLocalStream: groupCall.localStream,
