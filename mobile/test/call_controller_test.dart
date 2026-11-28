@@ -66,6 +66,7 @@ void main() {
       'getUserMedia:true:true',
       'createPeerConnection',
       'addTracks',
+      'applyBitrate:voice',
       'createOffer',
       'setLocalDescription:offer:offer-sdp',
     ]);
@@ -109,6 +110,7 @@ void main() {
       'getUserMedia:true:true',
       'createPeerConnection',
       'addTracks',
+      'applyBitrate:voice',
       'setRemoteDescription:offer:remote-offer',
       'addIceCandidate:c1',
       'addIceCandidate:c2',
