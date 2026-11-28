@@ -47,6 +47,7 @@ import {
   validateGroupTargetPayload,
   validateGroupTopologyPayload,
   validateGroupPersistentPayload,
+  validateGroupHistoryPayload,
   validateGroupUpdatePayload,
   validateLoginPayload,
   validateMessageDeletePayload,
@@ -1794,6 +1795,49 @@ export function createServer(
           : 'Persistence disabled: this room is now ephemeral.',
       });
       logger.info({ groupId, persistent }, 'group persistence updated');
+    });
+
+    socket.on(EVENTS.CLIENT.GROUP_HISTORY, (payload) => {
+      const rlResult = rateLimiters.check(socket.id);
+      if (!rlResult.allowed) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Rate limit exceeded' });
+        return;
+      }
+      const valResult = validateGroupHistoryPayload(payload);
+      if (!valResult.success) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: valResult.errors.join(', ') });
+        return;
+      }
+      const sender = userRegistry.getUserBySocketId(SocketId(socket.id));
+      if (sender === undefined) return;
+
+      const groupId = GroupId(valResult.data.groupId);
+      const group = groupStore.getGroup(groupId);
+      if (group === undefined || !group.members.some((m) => m.userId === sender.userId)) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Group not found' });
+        return;
+      }
+      if (persistentMessageStore === null || !persistentMessageStore.isPersistent(groupId)) {
+        socket.emit(EVENTS.SERVER.GROUP_HISTORY_RESULT, {
+          groupId: String(groupId),
+          messages: [],
+        });
+        return;
+      }
+      const since = valResult.data.since ?? 0;
+      const messages = persistentMessageStore.forGroup(groupId, since);
+      socket.emit(EVENTS.SERVER.GROUP_HISTORY_RESULT, {
+        groupId: String(groupId),
+        messages: messages.map((m) => ({
+          groupId: String(groupId),
+          id: m.id,
+          from: m.from,
+          fromUsername: m.fromUsername,
+          ciphertexts: m.ciphertexts,
+          timestamp: m.timestamp,
+          expiresAt: m.expiresAt,
+        })),
+      });
     });
 
     socket.on(EVENTS.CLIENT.GROUP_CALL_JOIN, (payload) => {

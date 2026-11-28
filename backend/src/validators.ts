@@ -477,6 +477,15 @@ export function validateGroupPersistentPayload(input: unknown): ValidationResult
   return toValidationResult(schema, input);
 }
 
+const groupHistoryPayloadSchema = z.strictObject({
+  groupId: z.string().min(1),
+  since: z.number().optional(),
+});
+
+export function validateGroupHistoryPayload(input: unknown): ValidationResult<z.infer<typeof groupHistoryPayloadSchema>> {
+  return toValidationResult(groupHistoryPayloadSchema, input);
+}
+
 export function validateGroupCallJoinPayload(
   input: unknown,
 ): ValidationResult<{ readonly groupId: string }> {

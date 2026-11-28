@@ -13,6 +13,9 @@ type ConversationSettingsMenuProps = {
   // non-admins, so the control never renders for them.
   readonly topology?: CallTopology | undefined;
   readonly onSelectTopology?: ((topology: CallTopology) => void) | undefined;
+  // Admin-only persistence toggle (Item 7); absent outside groups / non-admins.
+  readonly persistent?: boolean | undefined;
+  readonly onSelectPersistent?: ((persistent: boolean) => void) | undefined;
 };
 
 const TOPOLOGY_CHOICES: readonly { readonly value: CallTopology; readonly label: string }[] = [
@@ -31,6 +34,8 @@ export function ConversationSettingsMenu({
   onEditGroup,
   topology,
   onSelectTopology,
+  persistent,
+  onSelectPersistent,
 }: ConversationSettingsMenuProps) {
   return (
     <div
@@ -80,6 +85,22 @@ export function ConversationSettingsMenu({
             </button>
           ))}
         </>
+      )}
+      {onSelectPersistent !== undefined && (
+        <button
+          type="button"
+          role="menuitemcheckbox"
+          aria-checked={persistent === true}
+          onClick={() => onSelectPersistent(!(persistent === true))}
+          className="mt-1 flex w-full items-center justify-between rounded-md border-t border-zinc-800 px-2 py-1.5 text-left text-sm text-zinc-200 hover:bg-zinc-800/70"
+        >
+          Persistent history
+          {persistent === true && (
+            <span aria-hidden="true" className="text-indigo-400">
+              ✓
+            </span>
+          )}
+        </button>
       )}
       {canEditGroup === true && onEditGroup !== undefined && (
         <button

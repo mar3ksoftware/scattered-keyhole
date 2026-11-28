@@ -24,6 +24,8 @@ type ChatHeaderProps = {
   // wired for admins (onSelectTopology undefined otherwise).
   readonly groupTopology?: CallTopology | undefined;
   readonly onSelectTopology?: ((topology: CallTopology) => void) | undefined;
+  readonly groupPersistent?: boolean | undefined;
+  readonly onSelectPersistent?: ((persistent: boolean) => void) | undefined;
 };
 
 function SettingsIcon() {
@@ -61,6 +63,8 @@ export function ChatHeader({
   onEditGroup,
   groupTopology,
   onSelectTopology,
+  groupPersistent,
+  onSelectPersistent,
 }: ChatHeaderProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const showSettings = onSelectTimer !== undefined;
@@ -148,6 +152,8 @@ export function ChatHeader({
               canEditGroup={canEditGroup}
               topology={groupTopology}
               onSelectTopology={onSelectTopology}
+              persistent={groupPersistent}
+              onSelectPersistent={onSelectPersistent}
               onEditGroup={
                 onEditGroup !== undefined
                   ? () => {

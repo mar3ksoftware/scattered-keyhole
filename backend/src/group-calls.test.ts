@@ -505,13 +505,13 @@ describe('sfu token minting', () => {
     expect(result.url).toBe('wss://livekit.test');
 
     const claims = decodeJwtPayload(result.token);
-    expect(claims.sub).toBe('gc14_a');
-    expect(claims.name).toBe('gc14_a');
-    const video = claims.video as Record<string, unknown>;
-    expect(video.room).toBe(`group_${group.groupId}`);
-    expect(video.roomJoin).toBe(true);
-    expect(video.canPublish).toBe(true);
-    expect(video.canSubscribe).toBe(true);
+    expect(claims['sub']).toBe('gc14_a');
+    expect(claims['name']).toBe('gc14_a');
+    const video = claims['video'] as Record<string, unknown>;
+    expect(video['room']).toBe(`group_${group.groupId}`);
+    expect(video['roomJoin']).toBe(true);
+    expect(video['canPublish']).toBe(true);
+    expect(video['canSubscribe']).toBe(true);
   });
 
   test('GC15: a mesh room cannot mint an SFU token', async () => {

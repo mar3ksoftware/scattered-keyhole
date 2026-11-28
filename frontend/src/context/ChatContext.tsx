@@ -756,6 +756,8 @@ export type ChatContextValue = {
   readonly joinGroupCall: (groupId: string) => void;
   readonly leaveGroupCall: () => void;
   readonly setGroupTopology: (groupId: string, topology: CallTopology) => void;
+  readonly setGroupPersistent: (groupId: string, persistent: boolean) => void;
+  readonly loadGroupHistory: (groupId: string) => void;
   readonly promoteMember: (groupId: string, username: string) => void;
   readonly demoteMember: (groupId: string, username: string) => void;
   readonly redactMessage: (target: ConversationTarget, targetId: string) => void;
@@ -1582,6 +1584,14 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
     socketRef.current.emit(EVENTS.CLIENT.GROUP_TOPOLOGY, { groupId, topology });
   }, []);
 
+  const setGroupPersistent = useCallback((groupId: string, persistent: boolean) => {
+    socketRef.current.emit(EVENTS.CLIENT.GROUP_PERSISTENT_SET, { groupId, persistent });
+  }, []);
+
+  const loadGroupHistory = useCallback((groupId: string) => {
+    socketRef.current.emit(EVENTS.CLIENT.GROUP_HISTORY, { groupId });
+  }, []);
+
   const promoteMember = useCallback((groupId: string, username: string) => {
     socketRef.current.emit(EVENTS.CLIENT.GROUP_MEMBER_PROMOTE, { groupId, username });
   }, []);
@@ -2135,6 +2145,35 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
       );
     });
 
+    socket.on(EVENTS.SERVER.GROUP_HISTORY_RESULT, (result) => {
+      if (result.groupId === undefined) return;
+      for (const msg of result.messages ?? []) {
+        const myUsername = stateRef.current.user?.username;
+        if (myUsername === undefined) return;
+        const isOwn = msg.from === stateRef.current.user?.userId;
+        const myEntry = msg.ciphertexts.find(
+          (c: { to: string; ciphertext: string; iv: string }) => c.to === myUsername,
+        );
+        if (myEntry === undefined) {
+          const built = buildDecryptedGroupMessage(msg, '[Encrypted]', true, isOwn);
+          dispatch({ type: 'ADD_GROUP_MESSAGE', payload: built });
+          return;
+        }
+        void e2eeRef.current.decrypt(msg.fromUsername, myEntry.ciphertext, myEntry.iv).then(
+          (plaintext) => {
+            const built = buildDecryptedGroupMessage(msg, plaintext, false, isOwn);
+            if (!shouldStoreAtIngestion(built.expiresAt, Date.now())) return;
+            dispatch({ type: 'ADD_GROUP_MESSAGE', payload: built });
+          },
+          () => {
+            const built = buildDecryptedGroupMessage(msg, '[Decryption failed]', true, isOwn);
+            if (!shouldStoreAtIngestion(built.expiresAt, Date.now())) return;
+            dispatch({ type: 'ADD_GROUP_MESSAGE', payload: built });
+          },
+        );
+      }
+    });
+
     socket.on(EVENTS.SERVER.GROUP_MESSAGE_DELIVERY_FAILED, (data) => {
       showError(data.message);
     });
@@ -2491,6 +2530,8 @@ export function ChatProvider({ children }: { readonly children: ReactNode }) {
     joinGroupCall,
     leaveGroupCall,
     setGroupTopology,
+    setGroupPersistent,
+    loadGroupHistory,
     connectionStatus: state.connectionStatus,
     error: state.error,
     unread: state.unread,

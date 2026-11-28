@@ -608,6 +608,11 @@ export type ClientToServerEvents = {
   }) => void;
   'group:update': (payload: GroupUpdatePayload) => void;
   'group:topology': (payload: GroupTopologyPayload) => void;
+  'group:persistent:set': (payload: {
+    readonly groupId: string;
+    readonly persistent: boolean;
+  }) => void;
+  'group:history': (payload: { readonly groupId: string; readonly since?: number }) => void;
   'group:message:send': (payload: GroupEncryptedPayload) => void;
   'group:member:add': (payload: GroupTargetPayload) => void;
   'group:member:remove': (payload: GroupTargetPayload) => void;
@@ -661,6 +666,22 @@ export type ServerToClientEvents = {
   'group:created': (payload: GroupInfo) => void;
   'group:created_error': (payload: { readonly message: string }) => void;
   'group:updated': (payload: GroupUpdatedPayload) => void;
+  'group:history:result': (payload: {
+    readonly groupId: string;
+    readonly messages: readonly {
+      readonly groupId: string;
+      readonly id: string;
+      readonly from: string;
+      readonly fromUsername: string;
+      readonly ciphertexts: readonly {
+        readonly to: string;
+        readonly ciphertext: string;
+        readonly iv: string;
+      }[];
+      readonly timestamp: number;
+      readonly expiresAt: number | null;
+    }[];
+  }) => void;
   'group:message': (payload: GroupMessage) => void;
   'group:message_delivery_failed': (payload: { readonly message: string }) => void;
   'users:directory': (usernames: readonly string[]) => void;
@@ -717,6 +738,8 @@ export const EVENTS = {
     GROUP_CREATE: 'group:create',
     GROUP_UPDATE: 'group:update',
     GROUP_TOPOLOGY: 'group:topology',
+    GROUP_PERSISTENT_SET: 'group:persistent:set',
+    GROUP_HISTORY: 'group:history',
     GROUP_MESSAGE_SEND: 'group:message:send',
     GROUP_MEMBER_ADD: 'group:member:add',
     GROUP_MEMBER_REMOVE: 'group:member:remove',
@@ -765,6 +788,7 @@ export const EVENTS = {
     GROUP_CREATED: 'group:created',
     GROUP_CREATED_ERROR: 'group:created_error',
     GROUP_UPDATED: 'group:updated',
+    GROUP_HISTORY_RESULT: 'group:history:result',
     GROUP_MESSAGE: 'group:message',
     GROUP_MESSAGE_DELIVERY_FAILED: 'group:message_delivery_failed',
     USERS_DIRECTORY: 'users:directory',
