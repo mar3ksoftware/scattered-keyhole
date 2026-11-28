@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useChat } from '../context/ChatContext';
+import { AudioSettingsPanel } from './AudioSettingsPanel';
 import { CreateGroupModal } from './CreateGroupModal';
 import { GroupList } from './GroupList';
 import { ProfileEditor } from './ProfileEditor';
@@ -33,9 +34,19 @@ export function Sidebar({
   selectedGroup,
   onSelectGroup,
 }: SidebarProps) {
-  const { user, users, groups, error, connectionStatus, displayNameOf } = useChat();
+  const {
+    user,
+    users,
+    groups,
+    error,
+    connectionStatus,
+    displayNameOf,
+    audioSettings,
+    updateAudioSettings,
+  } = useChat();
   const [showCreateGroup, setShowCreateGroup] = useState(false);
   const [showProfileEditor, setShowProfileEditor] = useState(false);
+  const [showAudioSettings, setShowAudioSettings] = useState(false);
   const [activeTab, setActiveTab] = useState<'users' | 'groups'>('users');
 
   // The tab counter must match what UserList shows (it excludes the current user).
@@ -119,8 +130,16 @@ export function Sidebar({
 
       <button
         type="button"
+        onClick={() => setShowAudioSettings(true)}
+        className="mt-auto shrink-0 border-t border-zinc-800/50 px-4 py-2.5 text-left text-xs font-medium text-zinc-400 transition-colors hover:bg-zinc-800/40 hover:text-zinc-200"
+      >
+        Audio settings
+      </button>
+
+      <button
+        type="button"
         onClick={() => setShowProfileEditor(true)}
-        className="mt-auto shrink-0 border-t border-zinc-800/50 px-4 py-3 text-left transition-colors hover:bg-zinc-800/40"
+        className="shrink-0 border-t border-zinc-800/50 px-4 py-3 text-left transition-colors hover:bg-zinc-800/40"
       >
         <div className="flex min-w-0 items-center gap-2">
           <span
@@ -137,6 +156,12 @@ export function Sidebar({
 
       <CreateGroupModal isOpen={showCreateGroup} onClose={() => setShowCreateGroup(false)} />
       <ProfileEditor isOpen={showProfileEditor} onClose={() => setShowProfileEditor(false)} />
+      <AudioSettingsPanel
+        isOpen={showAudioSettings}
+        settings={audioSettings}
+        onChange={updateAudioSettings}
+        onClose={() => setShowAudioSettings(false)}
+      />
     </div>
   );
 }
