@@ -437,6 +437,23 @@ export type GroupPersistentPayload = {
   readonly persistent: boolean;
 };
 
+export type GroupHistoryPayload = {
+  readonly groupId: string;
+  readonly since?: number;
+};
+
+export type GroupHistoryResultPayload = {
+  readonly groupId: string;
+  readonly messages: readonly {
+    readonly id: string;
+    readonly from: string;
+    readonly fromUsername: string;
+    readonly ciphertexts: readonly { readonly to: string; readonly ciphertext: string; readonly iv: string }[];
+    readonly timestamp: number;
+    readonly expiresAt: number | null;
+  }[];
+};
+
 export type GroupUpdatedPayload = {
   readonly groupId: string;
   readonly name: string;
@@ -609,6 +626,7 @@ export const EVENTS = {
     GROUP_KICK_RESET: 'group:kick:reset',
     GROUP_TOPOLOGY: 'group:topology',
     GROUP_PERSISTENT_SET: 'group:persistent:set',
+    GROUP_HISTORY: 'group:history',
     GROUP_CALL_JOIN: 'group_call:join',
     GROUP_CALL_LEAVE: 'group_call:leave',
     GROUP_CALL_OFFER: 'group_call:offer',
@@ -647,6 +665,7 @@ export const EVENTS = {
     GROUP_CREATED: 'group:created',
     GROUP_CREATED_ERROR: 'group:created_error',
     GROUP_UPDATED: 'group:updated',
+    GROUP_HISTORY_RESULT: 'group:history:result',
     GROUP_MESSAGE: 'group:message',
     GROUP_MESSAGE_DELIVERY_FAILED: 'group:message_delivery_failed',
     USERS_DIRECTORY: 'users:directory',
@@ -699,6 +718,7 @@ export type ServerToClientEvents = {
   readonly [EVENTS.SERVER.GROUP_CREATED]: (group: GroupInfo) => void;
   readonly [EVENTS.SERVER.GROUP_CREATED_ERROR]: (payload: GroupErrorPayload) => void;
   readonly [EVENTS.SERVER.GROUP_UPDATED]: (payload: GroupUpdatedPayload) => void;
+  readonly [EVENTS.SERVER.GROUP_HISTORY_RESULT]: (payload: GroupHistoryResultPayload) => void;
   readonly [EVENTS.SERVER.GROUP_MESSAGE]: (message: GroupMessage) => void;
   readonly [EVENTS.SERVER.GROUP_MESSAGE_DELIVERY_FAILED]: (payload: GroupErrorPayload) => void;
   readonly [EVENTS.SERVER.USERS_DIRECTORY]: (usernames: readonly string[]) => void;
@@ -762,6 +782,8 @@ export type ClientToServerEvents = {
   readonly [EVENTS.CLIENT.MESSAGE_REDACT]: (payload: MessageDeletePayload) => void;
   readonly [EVENTS.CLIENT.GROUP_KICK_RESET]: (payload: GroupTargetPayload) => void;
   readonly [EVENTS.CLIENT.GROUP_TOPOLOGY]: (payload: GroupTopologyPayload) => void;
+  readonly [EVENTS.CLIENT.GROUP_PERSISTENT_SET]: (payload: GroupPersistentPayload) => void;
+  readonly [EVENTS.CLIENT.GROUP_HISTORY]: (payload: GroupHistoryPayload) => void;
   readonly [EVENTS.CLIENT.GROUP_PERSISTENT_SET]: (payload: GroupPersistentPayload) => void;
   readonly [EVENTS.CLIENT.GROUP_CALL_JOIN]: (payload: GroupCallJoinPayload) => void;
   readonly [EVENTS.CLIENT.GROUP_CALL_LEAVE]: (payload: GroupCallLeavePayload) => void;
