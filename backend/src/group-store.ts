@@ -44,6 +44,7 @@ export class GroupStore {
       readonly name?: string | undefined;
       readonly description?: string | undefined;
       readonly topology?: CallTopology | undefined;
+      readonly persistent?: boolean | undefined;
     },
   ): GroupInfo | undefined {
     const group = this.#groups.get(groupId);
@@ -54,6 +55,7 @@ export class GroupStore {
       name: patch.name ?? group.name,
       description: patch.description ?? group.description,
       topology: patch.topology ?? group.topology,
+      persistent: patch.persistent ?? group.persistent,
     };
     this.#groups.set(groupId, updated);
     return updated;

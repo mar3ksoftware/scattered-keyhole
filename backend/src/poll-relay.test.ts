@@ -161,6 +161,7 @@ describe('Poll relays', () => {
       dmSettingsStore,
       tombstoneStore,
       messageStore,
+    null,
       pino({ level: 'silent' }),
     );
 

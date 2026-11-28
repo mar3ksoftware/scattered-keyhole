@@ -466,6 +466,17 @@ export function validateGroupTopologyPayload(input: unknown): ValidationResult<{
   return toValidationResult(schema, input);
 }
 
+export function validateGroupPersistentPayload(input: unknown): ValidationResult<{
+  readonly groupId: string;
+  readonly persistent: boolean;
+}> {
+  const schema = z.strictObject({
+    groupId: z.string().min(1),
+    persistent: z.boolean(),
+  });
+  return toValidationResult(schema, input);
+}
+
 export function validateGroupCallJoinPayload(
   input: unknown,
 ): ValidationResult<{ readonly groupId: string }> {

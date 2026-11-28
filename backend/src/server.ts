@@ -46,6 +46,7 @@ import {
   validateGroupMessagePayload,
   validateGroupTargetPayload,
   validateGroupTopologyPayload,
+  validateGroupPersistentPayload,
   validateGroupUpdatePayload,
   validateLoginPayload,
   validateMessageDeletePayload,
@@ -102,6 +103,7 @@ export function createServer(
   dmSettingsStore: DmSettingsStore,
   tombstoneStore: TombstoneStore,
   messageStore: MessageStore,
+  persistentMessageStore: import('./persistent-message-store.js').PersistentMessageStore | null,
   logger: Logger,
   livekit: LivekitConfig = { livekitUrl: null, livekitApiKey: null, livekitApiSecret: null },
 ): void {
@@ -1736,6 +1738,62 @@ export function createServer(
       }
 
       logger.info({ groupId, topology: updated.topology }, 'group topology updated');
+    });
+
+    socket.on(EVENTS.CLIENT.GROUP_PERSISTENT_SET, (payload) => {
+      const rlResult = rateLimiters.check(socket.id);
+      if (!rlResult.allowed) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Rate limit exceeded' });
+        return;
+      }
+      const valResult = validateGroupPersistentPayload(payload);
+      if (!valResult.success) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: valResult.errors.join(', ') });
+        return;
+      }
+      const sender = userRegistry.getUserBySocketId(SocketId(socket.id));
+      if (sender === undefined) return;
+
+      const groupId = GroupId(valResult.data.groupId);
+      const group = groupStore.getGroup(groupId);
+      if (group === undefined) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Group not found' });
+        return;
+      }
+      const senderMember = group.members.find((m) => m.userId === sender.userId);
+      if (senderMember?.isAdmin !== true) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Only admins can change persistence' });
+        return;
+      }
+      if (persistentMessageStore === null) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Persistence is disabled on this server.' });
+        return;
+      }
+      const persistent = valResult.data.persistent;
+      // Host policy: respect allowGroupPersistence.
+      // (Config check is done at startup; store non-null implies allowed.)
+      groupStore.updateGroup(groupId, { persistent });
+      persistentMessageStore.setSettings(groupId, persistent, sender.username);
+
+      const updated = groupStore.getGroup(groupId);
+      if (updated === undefined) return;
+      for (const member of updated.members) {
+        io.to(String(member.userId)).emit(EVENTS.SERVER.GROUP_UPDATED, {
+          groupId: String(groupId),
+          name: updated.name,
+          description: updated.description,
+          topology: updated.topology,
+          persistent: updated.persistent,
+          u: sender.username,
+          timestamp: Date.now(),
+        });
+      }
+      io.to(String(sender.userId)).emit(EVENTS.SERVER.NOTICE, {
+        message: persistent
+          ? 'Persistence enabled: messages in this room will survive server restarts.'
+          : 'Persistence disabled: this room is now ephemeral.',
+      });
+      logger.info({ groupId, persistent }, 'group persistence updated');
     });
 
     socket.on(EVENTS.CLIENT.GROUP_CALL_JOIN, (payload) => {

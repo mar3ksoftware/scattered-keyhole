@@ -167,6 +167,7 @@ describe('Tier-1 relays', () => {
       dmSettingsStore,
       tombstoneStore,
       messageStore,
+    null,
       pino({ level: 'silent' }),
     );
 

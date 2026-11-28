@@ -178,6 +178,7 @@ describe('Socket.io Server', () => {
       dmSettingsStore,
       tombstoneStore,
       messageStore,
+    null,
       pino({ level: 'silent' }),
     );
 

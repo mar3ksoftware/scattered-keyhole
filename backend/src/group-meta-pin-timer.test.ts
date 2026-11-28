@@ -203,6 +203,7 @@ describe('Tier-3 group metadata, pins, and disappearing timers', () => {
       dmSettingsStore,
       tombstoneStore,
       messageStore,
+    null,
       pino({ level: 'silent' }),
     );
 
