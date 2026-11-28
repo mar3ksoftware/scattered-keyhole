@@ -5,6 +5,7 @@
 
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:scattered_keyhole/src/calls/call_transport.dart';
+import 'package:scattered_keyhole/src/state/audio_settings.dart';
 
 /// Records every transport step and lets tests drive the callbacks the real
 /// peer connection would fire.
@@ -35,7 +36,11 @@ class FakeCallTransport implements CallTransport {
   MediaStream? remoteStream;
 
   @override
-  Future<void> getUserMedia({required bool audio, required bool video}) async {
+  Future<void> getUserMedia({
+    required bool audio,
+    required bool video,
+    Map<String, dynamic>? audioConstraints,
+  }) async {
     log.add('getUserMedia:$audio:$video');
     if (denyMedia) throw Exception('permission denied');
   }
@@ -55,6 +60,18 @@ class FakeCallTransport implements CallTransport {
   @override
   Future<void> addTracks({MediaStream? stream}) async =>
       log.add(stream == null ? 'addTracks' : 'addTracks:shared');
+
+  @override
+  Future<void> applyBitrate(AudioBitrate bitrate) async =>
+      log.add('applyBitrate:${bitrate.name}');
+
+  bool micEnabled = true;
+
+  @override
+  void setMicEnabled(bool enabled) {
+    micEnabled = enabled;
+    log.add('setMicEnabled:$enabled');
+  }
 
   @override
   Future<String> createOffer() async {

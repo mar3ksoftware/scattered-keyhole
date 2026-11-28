@@ -12,6 +12,8 @@ import 'dart:convert';
 // top-level helper of the same name.
 import 'package:flutter_webrtc/flutter_webrtc.dart' as webrtc;
 
+import '../state/audio_settings.dart';
+
 /// One peer connection plus its local capture stream.
 ///
 /// Every method mirrors the corresponding step of the web client's
@@ -20,7 +22,14 @@ import 'package:flutter_webrtc/flutter_webrtc.dart' as webrtc;
 abstract interface class CallTransport {
   /// Opens the microphone and camera. Throws when the platform denies
   /// access; the controller turns that into a user-visible error.
-  Future<void> getUserMedia({required bool audio, required bool video});
+  ///
+  /// [audioConstraints] overrides the bare `audio: true` flag with device and
+  /// DSP choices when supplied (roadmap 8c). Null keeps the default.
+  Future<void> getUserMedia({
+    required bool audio,
+    required bool video,
+    Map<String, dynamic>? audioConstraints,
+  });
 
   /// Creates the peer connection and wires its events.
   ///
@@ -39,6 +48,12 @@ abstract interface class CallTransport {
   /// [stream] overrides the transport's own capture stream; group calls
   /// capture once and share that stream across every peer connection.
   Future<void> addTracks({webrtc.MediaStream? stream});
+
+  /// Applies the Opus bitrate ceiling to the live audio sender (8c).
+  Future<void> applyBitrate(AudioBitrate bitrate);
+
+  /// Enables or disables the local microphone track (mute toggle / PTT).
+  void setMicEnabled(bool enabled);
 
   /// Creates a local offer and returns its SDP.
   Future<String> createOffer();
@@ -82,10 +97,17 @@ class WebRtcCallTransport implements CallTransport {
   webrtc.MediaStream? get remoteStream => _remoteStream;
 
   @override
-  Future<void> getUserMedia({required bool audio, required bool video}) async {
+  Future<void> getUserMedia({
+    required bool audio,
+    required bool video,
+    Map<String, dynamic>? audioConstraints,
+  }) async {
+    final audioValue = audio
+        ? (audioConstraints ?? true)
+        : false;
     _localStream =
         await webrtc.navigator.mediaDevices.getUserMedia(<String, dynamic>{
-      'audio': audio,
+      'audio': audioValue,
       'video': video,
     });
   }
@@ -128,6 +150,40 @@ class WebRtcCallTransport implements CallTransport {
     if (pc == null || source == null) return;
     for (final track in source.getTracks()) {
       await pc.addTrack(track, source);
+    }
+  }
+
+  @override
+  void setMicEnabled(bool enabled) {
+    final stream = _localStream;
+    if (stream == null) return;
+    for (final track in stream.getAudioTracks()) {
+      track.enabled = enabled;
+    }
+  }
+
+  @override
+  Future<void> applyBitrate(AudioBitrate bitrate) async {
+    final pc = _pc;
+    if (pc == null) return;
+    final bps = bitrate == AudioBitrate.music ? 128000 : 32000;
+    final senders = await pc.getSenders();
+    for (final sender in senders) {
+      if (sender.track?.kind != 'audio') continue;
+      try {
+        final params = sender.parameters;
+        final encodings = params.encodings ?? <webrtc.RTCRtpEncoding>[];
+        if (encodings.isEmpty) {
+          encodings.add(webrtc.RTCRtpEncoding());
+        }
+        for (final encoding in encodings) {
+          encoding.maxBitrate = bps;
+        }
+        params.encodings = encodings;
+        await sender.setParameters(params);
+      } catch (_) {
+        // Best-effort; platforms differ in setParameters support.
+      }
     }
   }
 
