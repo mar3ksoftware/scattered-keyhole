@@ -43,6 +43,9 @@ The repository ships three components: a Bun backend on port 3000, a React web a
 - **Zero chat persistence** — no localStorage, no cookies, no server-side message storage
 - **Rate limiting** — token bucket, 10 requests/s per socket
 - **Responsive UI** — split pane on desktop, stacked views on mobile, dark glass theme
+- **1:1 voice/video calls** — WebRTC calls with E2EE, mute toggle, and device/audio quality settings
+- **Group calls** — mesh (up to 6 participants, strongest privacy) or SFU (LiveKit, larger rooms, less private); topology is chosen by the group admin at creation and can be switched later
+- **Audio settings** — Opus bitrate (voice 32 kbps / music 128 kbps), echo/noise/gain toggles, input/output device selection, push-to-talk and push-to-mute with rebindable keys
 
 ## Setup
 
@@ -318,6 +321,12 @@ Scattered Keyhole/
 | `src/components/ChatArea.tsx` | Message list + input + header |
 | `src/components/MessageBubble.tsx` | Individual message with E2EE status |
 | `src/components/UserItem.tsx` | Selectable user row |
+| `src/lib/calls.ts` | WebRTC peer connection + getUserMedia helpers |
+| `src/lib/group-calls.ts` | Group call controller (mesh + SFU via LiveKit) |
+| `src/lib/sfu-call.ts` | LiveKit room bridge for SFU group calls |
+| `src/lib/audioSettings.ts` | Audio preferences, constraints, bitrate, PTT/PTM controller |
+| `src/components/AudioSettingsPanel.tsx` | Audio settings modal + device/key capture |
+| `src/components/CallMuteButton.tsx` | 1:1 call mic toggle |
 
 ### Mobile modules (`mobile/`)
 
@@ -335,6 +344,12 @@ Scattered Keyhole/
 | `lib/src/crypto/e2ee_session.dart` | Per-peer shared key management |
 | `lib/src/crypto/media_crypto.dart` | Per-file encryption (file key + IV, SHA-256) |
 | `lib/src/models/` | Wire models: user, group, message, media, poll, auth, errors |
+| `lib/src/calls/call_transport.dart` | WebRTC transport interface + flutter_webrtc implementation |
+| `lib/src/calls/sfu_transport.dart` | LiveKit room bridge for SFU group calls |
+| `lib/src/state/audio_settings.dart` | Audio preferences, constraints, bitrate, key formatting |
+| `lib/src/ui/widgets/call_overlay.dart` | 1:1 call surface with mute toggle and hold-to-talk |
+| `lib/src/ui/widgets/group_call_overlay.dart` | Group call surface (mesh + SFU) |
+| `lib/src/ui/widgets/audio_settings_sheet.dart` | Audio settings bottom sheet |
 | `lib/src/utils/` | Pure decision helpers: envelope exp, pins, purge, timer, group metadata, conversation keys |
 | `lib/src/ui/` | Screens (auth, chat shell, conversation list) and widgets |
 
