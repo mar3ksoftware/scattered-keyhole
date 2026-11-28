@@ -104,6 +104,8 @@ export function ChatArea({ selectedUser, selectedGroup, onBack, showBack }: Chat
     joinGroupCall,
     leaveGroupCall,
     setGroupTopology,
+    setGroupPersistent,
+    loadGroupHistory,
   } = useChat();
   const [showMembers, setShowMembers] = useState(false);
   const [editingGroup, setEditingGroup] = useState(false);
@@ -129,6 +131,14 @@ export function ChatArea({ selectedUser, selectedGroup, onBack, showBack }: Chat
 
   const selectedGroupInfo =
     selectedGroup !== null ? groups.find((g) => g.groupId === selectedGroup) : undefined;
+
+  // Persistent rooms: fetch stored history when the conversation opens.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-run on conversation switch
+  useEffect(() => {
+    if (selectedGroupInfo !== undefined && selectedGroupInfo.persistent === true) {
+      loadGroupHistory(selectedGroupInfo.groupId);
+    }
+  }, [selectedGroupInfo?.groupId, selectedGroupInfo?.persistent, loadGroupHistory]);
 
   // The peer may be offline, so match by username instead of requiring them to
   // be present in the active user list.
@@ -286,6 +296,12 @@ export function ChatArea({ selectedUser, selectedGroup, onBack, showBack }: Chat
         onSelectTopology={
           selectedGroupInfo !== undefined && canAdmin
             ? (topology) => setGroupTopology(selectedGroupInfo.groupId, topology)
+            : undefined
+        }
+        groupPersistent={selectedGroupInfo?.persistent}
+        onSelectPersistent={
+          selectedGroupInfo !== undefined && canAdmin
+            ? (persistent) => setGroupPersistent(selectedGroupInfo.groupId, persistent)
             : undefined
         }
         callControls={

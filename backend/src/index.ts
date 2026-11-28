@@ -41,11 +41,11 @@ const accountStore = new AccountStore(db);
 const userDirectory = new UserDirectory(db);
 const groupStore = new GroupStore();
 const kickVoteStore = new KickVoteStore();
-const mediaDiskDir = process.env.MEDIA_DISK_DIR;
+const mediaDiskDir = process.env['MEDIA_DISK_DIR'];
 const mediaStore = new MediaStore(
   mediaDiskDir === undefined
-    ? { wipeOnStartup: process.env.MEDIA_WIPE_ON_STARTUP === '1' }
-    : { diskDir: mediaDiskDir, wipeOnStartup: process.env.MEDIA_WIPE_ON_STARTUP === '1' },
+    ? { wipeOnStartup: process.env['MEDIA_WIPE_ON_STARTUP'] === '1' }
+    : { diskDir: mediaDiskDir, wipeOnStartup: process.env['MEDIA_WIPE_ON_STARTUP'] === '1' },
 );
 const mediaAuth = new MediaAuth();
 const profileStore = new ProfileStore();

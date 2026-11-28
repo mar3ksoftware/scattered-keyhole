@@ -1829,6 +1829,7 @@ export function createServer(
       socket.emit(EVENTS.SERVER.GROUP_HISTORY_RESULT, {
         groupId: String(groupId),
         messages: messages.map((m) => ({
+          groupId: String(groupId),
           id: m.id,
           from: m.from,
           fromUsername: m.fromUsername,
