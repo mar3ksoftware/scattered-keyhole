@@ -78,6 +78,10 @@ class CallOverlay extends StatelessWidget {
     required this.peerName,
     required this.transport,
     required this.onEnd,
+    this.muted = false,
+    this.onToggleMute,
+    this.onPttDown,
+    this.onPttUp,
   });
 
   final CallState state;
@@ -86,6 +90,10 @@ class CallOverlay extends StatelessWidget {
   /// Live media handle; null only in tests that fake the transport.
   final CallTransport? transport;
   final VoidCallback onEnd;
+  final bool muted;
+  final VoidCallback? onToggleMute;
+  final VoidCallback? onPttDown;
+  final VoidCallback? onPttUp;
 
   @override
   Widget build(BuildContext context) {
@@ -154,6 +162,37 @@ class CallOverlay extends StatelessWidget {
               ),
             ),
           ),
+          if (onToggleMute != null)
+            Positioned(
+              left: 16,
+              bottom: 48,
+              child: TextButton(
+                key: const Key('mute-toggle'),
+                onPressed: onToggleMute,
+                style: TextButton.styleFrom(foregroundColor: AppColors.textSecondary),
+                child: Text(muted ? 'Unmute mic' : 'Mute mic'),
+              ),
+            ),
+          if (onPttDown != null)
+            Positioned(
+              right: 16,
+              bottom: 48,
+              child: GestureDetector(
+                onTapDown: (_) => onPttDown?.call(),
+                onTapUp: (_) => onPttUp?.call(),
+                onTapCancel: () => onPttUp?.call(),
+                child: Container(
+                  key: const Key('ptt-button'),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: AppColors.surfaceAlt,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: AppColors.border),
+                  ),
+                  child: const Text('Hold to talk', style: TextStyle(fontSize: 12)),
+                ),
+              ),
+            ),
         ],
       ),
     );
