@@ -123,6 +123,7 @@ beforeAll(async () => {
     dmSettingsStore,
     tombstoneStore,
     messageStore,
+    null,
     pino({ level: 'silent' }),
   );
   const handler = engine.handler();

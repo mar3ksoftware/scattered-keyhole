@@ -432,11 +432,17 @@ export type GroupUpdatePayload = {
 
 // Full-state apply: both fields travel together so clients overwrite the
 // pair and ignore groups they do not know.
+export type GroupPersistentPayload = {
+  readonly groupId: string;
+  readonly persistent: boolean;
+};
+
 export type GroupUpdatedPayload = {
   readonly groupId: string;
   readonly name: string;
   readonly description: string;
   readonly topology: CallTopology;
+  readonly persistent?: boolean;
   readonly u: string;
   readonly timestamp: number;
 };
@@ -602,6 +608,7 @@ export const EVENTS = {
     MESSAGE_REDACT: 'message:redact',
     GROUP_KICK_RESET: 'group:kick:reset',
     GROUP_TOPOLOGY: 'group:topology',
+    GROUP_PERSISTENT_SET: 'group:persistent:set',
     GROUP_CALL_JOIN: 'group_call:join',
     GROUP_CALL_LEAVE: 'group_call:leave',
     GROUP_CALL_OFFER: 'group_call:offer',
@@ -755,6 +762,7 @@ export type ClientToServerEvents = {
   readonly [EVENTS.CLIENT.MESSAGE_REDACT]: (payload: MessageDeletePayload) => void;
   readonly [EVENTS.CLIENT.GROUP_KICK_RESET]: (payload: GroupTargetPayload) => void;
   readonly [EVENTS.CLIENT.GROUP_TOPOLOGY]: (payload: GroupTopologyPayload) => void;
+  readonly [EVENTS.CLIENT.GROUP_PERSISTENT_SET]: (payload: GroupPersistentPayload) => void;
   readonly [EVENTS.CLIENT.GROUP_CALL_JOIN]: (payload: GroupCallJoinPayload) => void;
   readonly [EVENTS.CLIENT.GROUP_CALL_LEAVE]: (payload: GroupCallLeavePayload) => void;
   readonly [EVENTS.CLIENT.GROUP_CALL_OFFER]: (payload: GroupCallOfferPayload) => void;

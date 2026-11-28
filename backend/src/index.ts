@@ -11,6 +11,7 @@ import { MediaAuth } from './media-auth';
 import { createMediaHttpHandler } from './media-http';
 import { MediaStore } from './media-store';
 import { MessageStore } from './message-store';
+import { PersistentMessageStore } from './persistent-message-store';
 import { ProfileStore } from './profile-store';
 import { RateLimiterRegistry } from './rate-limiter';
 import { createServer } from './server';
@@ -50,6 +51,9 @@ const mediaAuth = new MediaAuth();
 const profileStore = new ProfileStore();
 const dmSettingsStore = new DmSettingsStore();
 const messageStore = new MessageStore(db);
+const persistentMessageStore = config.persistenceEnabled
+  ? new PersistentMessageStore(db, config.mediaDir, config.maxMessagesPerRoom)
+  : null;
 const tombstoneStore = new TombstoneStore();
 const mediaRateLimiters = new RateLimiterRegistry();
 const mediaHttp = createMediaHttpHandler(
@@ -73,6 +77,7 @@ createServer(
   dmSettingsStore,
   tombstoneStore,
   messageStore,
+  persistentMessageStore,
   logger,
   {
     livekitUrl: config.livekitUrl,

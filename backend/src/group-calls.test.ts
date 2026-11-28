@@ -154,6 +154,7 @@ function startHarness(livekit?: LivekitConfig): Harness {
     dmSettingsStore,
     tombstoneStore,
     messageStore,
+    null,
     pino({ level: 'silent' }),
     livekit,
   );
