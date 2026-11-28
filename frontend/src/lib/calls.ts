@@ -23,7 +23,12 @@ export function createPeerConnection(handlers: CallHandlers): RTCPeerConnection 
   return pc;
 }
 
-export async function getUserMedia(audio = true, video = true): Promise<MediaStream> {
+// `audio` accepts constraints so 1:1 calls can carry the user's device and
+// DSP choices; group calls keep passing `true`.
+export async function getUserMedia(
+  audio: boolean | MediaTrackConstraints = true,
+  video = true,
+): Promise<MediaStream> {
   return navigator.mediaDevices.getUserMedia({ audio, video });
 }
 
