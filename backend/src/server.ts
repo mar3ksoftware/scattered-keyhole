@@ -521,6 +521,12 @@ export function createServer(
     });
 
     socket.on(EVENTS.CLIENT.E2EE_PUBLIC_KEY, (payload) => {
+      const rlResult = rateLimiters.check(socket.id);
+      if (!rlResult.allowed) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Rate limit exceeded' });
+        return;
+      }
+
       const valResult = validateE2eePublicKeyPayload(payload);
       if (!valResult.success) {
         return;
@@ -547,6 +553,12 @@ export function createServer(
     });
 
     socket.on(EVENTS.CLIENT.E2EE_MLKEM_CT, (payload) => {
+      const rlResult = rateLimiters.check(socket.id);
+      if (!rlResult.allowed) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Rate limit exceeded' });
+        return;
+      }
+
       const valResult = validateMlkemCiphertextPayload(payload);
       if (!valResult.success) return;
       const sender = userRegistry.getUserBySocketId(SocketId(socket.id));
@@ -562,6 +574,12 @@ export function createServer(
 
     // ── Tier-8 call signaling (relay only; media is peer-to-peer) ──
     socket.on(EVENTS.CLIENT.CALL_OFFER, (payload) => {
+      const rlResult = rateLimiters.check(socket.id);
+      if (!rlResult.allowed) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Rate limit exceeded' });
+        return;
+      }
+
       const valResult = validateCallOfferPayload(payload);
       if (!valResult.success) return;
       const sender = userRegistry.getUserBySocketId(SocketId(socket.id));
@@ -576,6 +594,12 @@ export function createServer(
     });
 
     socket.on(EVENTS.CLIENT.CALL_ANSWER, (payload) => {
+      const rlResult = rateLimiters.check(socket.id);
+      if (!rlResult.allowed) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Rate limit exceeded' });
+        return;
+      }
+
       const valResult = validateCallAnswerPayload(payload);
       if (!valResult.success) return;
       const sender = userRegistry.getUserBySocketId(SocketId(socket.id));
@@ -590,6 +614,12 @@ export function createServer(
     });
 
     socket.on(EVENTS.CLIENT.CALL_ICE, (payload) => {
+      const rlResult = rateLimiters.check(socket.id);
+      if (!rlResult.allowed) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Rate limit exceeded' });
+        return;
+      }
+
       const valResult = validateCallIcePayload(payload);
       if (!valResult.success) return;
       const sender = userRegistry.getUserBySocketId(SocketId(socket.id));
@@ -604,6 +634,12 @@ export function createServer(
     });
 
     socket.on(EVENTS.CLIENT.CALL_END, (payload) => {
+      const rlResult = rateLimiters.check(socket.id);
+      if (!rlResult.allowed) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Rate limit exceeded' });
+        return;
+      }
+
       const valResult = validateCallEndPayload(payload);
       if (!valResult.success) return;
       const sender = userRegistry.getUserBySocketId(SocketId(socket.id));
@@ -617,6 +653,12 @@ export function createServer(
     });
 
     socket.on(EVENTS.CLIENT.CALL_REJECT, (payload) => {
+      const rlResult = rateLimiters.check(socket.id);
+      if (!rlResult.allowed) {
+        socket.emit(EVENTS.SERVER.ERROR, { message: 'Rate limit exceeded' });
+        return;
+      }
+
       const valResult = validateCallRejectPayload(payload);
       if (!valResult.success) return;
       const sender = userRegistry.getUserBySocketId(SocketId(socket.id));
