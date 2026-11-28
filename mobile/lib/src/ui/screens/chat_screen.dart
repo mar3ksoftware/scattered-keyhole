@@ -580,6 +580,10 @@ class _ChatScreenState extends State<ChatScreen> {
                                 : _controller.displayNameOf(callPeer),
                             transport: _controller.callTransport,
                             onEnd: _controller.endCall,
+                            muted: _controller.callMuted,
+                            onToggleMute: _controller.toggleCallMute,
+                            onPttDown: () => _controller.setPttHeld(true),
+                            onPttUp: () => _controller.setPttHeld(false),
                           ),
                         ),
                       if (groupCallHere)

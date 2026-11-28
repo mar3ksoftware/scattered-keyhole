@@ -13,6 +13,7 @@ import 'package:scattered_keyhole/src/calls/call_transport.dart';
 import 'package:scattered_keyhole/src/calls/sfu_transport.dart';
 import 'package:scattered_keyhole/src/crypto/e2ee_session.dart';
 import 'package:scattered_keyhole/src/models/models.dart';
+import 'package:scattered_keyhole/src/state/audio_settings.dart';
 import 'package:scattered_keyhole/src/net/chat_events.dart';
 import 'package:scattered_keyhole/src/net/media_client.dart';
 import 'package:scattered_keyhole/src/net/socket_service.dart';
@@ -701,6 +702,7 @@ ChatController makeController(
   FakeSocketService fake, {
   CallTransport Function()? callTransportFactory,
   SfuTransport Function()? sfuTransportFactory,
+  AudioSettings? audioSettings,
 }) {
   return ChatController(
     socket: fake,
@@ -709,6 +711,7 @@ ChatController makeController(
     sharedKeyTimeoutMs: 50,
     callTransportFactory: callTransportFactory,
     sfuTransportFactory: sfuTransportFactory,
+    audioSettings: audioSettings,
   );
 }
 

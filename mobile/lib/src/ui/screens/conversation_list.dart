@@ -6,6 +6,7 @@ import '../theme/app_theme.dart';
 import '../widgets/connection_status.dart';
 import '../widgets/create_group_sheet.dart';
 import '../widgets/empty_state.dart';
+import '../widgets/audio_settings_sheet.dart';
 import '../widgets/profile_editor_sheet.dart';
 
 /// The master list: connection header, Users/Groups tabs, the roster and
@@ -100,6 +101,18 @@ class _ConversationListState extends State<ConversationList> {
             ),
           ),
           ConnectionBadge(status: status),
+          IconButton(
+            key: const Key('open-audio-settings'),
+            icon: const Icon(
+              Icons.headset_mic_outlined,
+              size: 22,
+              color: AppColors.textSecondary,
+            ),
+            onPressed: () => showAudioSettingsSheet(
+              context,
+              controller: widget.controller,
+            ),
+          ),
           IconButton(
             // Profile editor entry point (C9): app bar settings affordance.
             icon: const Icon(

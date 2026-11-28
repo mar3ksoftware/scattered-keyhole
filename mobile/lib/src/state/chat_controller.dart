@@ -28,6 +28,7 @@ import '../crypto/e2ee_session.dart';
 import '../crypto/media_crypto.dart';
 import '../models/models.dart';
 import '../net/media_client.dart';
+import './audio_settings.dart';
 import '../net/socket_service.dart';
 import '../utils/conversation_keys.dart';
 import '../utils/envelope.dart';
@@ -143,9 +144,11 @@ class ChatController extends ChangeNotifier {
     this.typingHideDelay = const Duration(milliseconds: 6000),
     CallTransport Function()? callTransportFactory,
     SfuTransport Function()? sfuTransportFactory,
+    AudioSettings? audioSettings,
   })  : _e2ee = e2ee ?? E2eeSession(),
         _callTransportFactory = callTransportFactory ?? WebRtcCallTransport.new,
-        _sfuTransportFactory = sfuTransportFactory ?? defaultSfuTransport {
+        _sfuTransportFactory = sfuTransportFactory ?? defaultSfuTransport,
+        _audioSettings = audioSettings ?? AudioSettings.defaults {
     _listen();
     connect();
   }
@@ -197,6 +200,15 @@ class ChatController extends ChangeNotifier {
   /// Builds the SFU room transport for `sfu`-topology group calls. Tests
   /// inject a fake so no LiveKit platform channel is opened.
   final SfuTransport Function() _sfuTransportFactory;
+
+  /// User audio preferences (roadmap 8c). Persisted separately; kept in
+  /// memory here so call code can read them synchronously.
+  AudioSettings _audioSettings;
+
+  bool _callMuted = false;
+  bool _pttHeld = false;
+
+  bool get callMuted => _callMuted;
 
   /// Default typing hide window, in milliseconds (spec C1: 6 s).
   static const int typingHideMs = 6000;
@@ -1363,6 +1375,50 @@ class ChatController extends ChangeNotifier {
   /// Media handle for the in-call overlay; null while no call is up.
   CallTransport? get callTransport => _call;
 
+  AudioSettings get audioSettings => _audioSettings;
+
+  /// Replaces the audio preferences, persists them and live-applies to an
+  /// active 1:1 call (constraints + bitrate).
+  void toggleCallMute() {
+    _callMuted = !_callMuted;
+    _applyMicEnabled();
+    _notify();
+  }
+
+  void setPttHeld(bool held) {
+    _pttHeld = held;
+    _applyMicEnabled();
+    _notify();
+  }
+
+  void _applyMicEnabled() {
+    final enabled = (!_callMuted) || _pttHeld;
+    _call?.setMicEnabled(enabled);
+  }
+
+  Future<void> updateAudioSettings(AudioSettings next) async {
+    final sanitized = sanitizeAudioSettings(next);
+    _audioSettings = sanitized;
+    await AudioSettingsStore.save(sanitized);
+    _notify();
+
+    final transport = _call;
+    if (transport == null) return;
+    final track = transport.localStream?.getAudioTracks().firstOrNull;
+    if (track != null) {
+      try {
+        await track.applyConstraints(buildAudioConstraints(sanitized));
+      } catch (_) {
+        // Constraints can be rejected by the platform; keep the call alive.
+      }
+    }
+    try {
+      await transport.applyBitrate(sanitized.bitrate);
+    } catch (_) {
+      // Best-effort; the next call picks up the new value.
+    }
+  }
+
   /// Dials [peer]: captures local media, builds the offer and sends it.
   ///
   /// No-op while another call is active — the signaling channel carries one
@@ -1381,10 +1437,16 @@ class ChatController extends ChangeNotifier {
     _callRemoteDescriptionSet = false;
     _pendingOfferSdp = null;
     _pendingIce.clear();
+    _callMuted = false;
+    _pttHeld = false;
     _notify();
 
     try {
-      await transport.getUserMedia(audio: true, video: true);
+      await transport.getUserMedia(
+        audio: true,
+        video: true,
+        audioConstraints: buildAudioConstraints(_audioSettings),
+      );
       await transport.createPeerConnection(
         onIceCandidate: (candidateJson) {
           if (!identical(_call, transport)) return;
@@ -1397,6 +1459,7 @@ class ChatController extends ChangeNotifier {
             _handleCallConnectionState(transport, state),
       );
       await transport.addTracks();
+      await transport.applyBitrate(_audioSettings.bitrate);
       final offer = await transport.createOffer();
       await transport.setLocalDescription('offer', offer);
       // The call may have been hung up while the offer was negotiated.
@@ -1426,7 +1489,11 @@ class ChatController extends ChangeNotifier {
     _callRemoteDescriptionSet = false;
 
     try {
-      await transport.getUserMedia(audio: true, video: true);
+      await transport.getUserMedia(
+        audio: true,
+        video: true,
+        audioConstraints: buildAudioConstraints(_audioSettings),
+      );
       await transport.createPeerConnection(
         onIceCandidate: (candidateJson) {
           if (!identical(_call, transport)) return;
@@ -1439,6 +1506,7 @@ class ChatController extends ChangeNotifier {
             _handleCallConnectionState(transport, state),
       );
       await transport.addTracks();
+      await transport.applyBitrate(_audioSettings.bitrate);
       if (offerSdp != null && offerSdp.isNotEmpty) {
         await transport.setRemoteDescription('offer', offerSdp);
         _callRemoteDescriptionSet = true;
@@ -1553,6 +1621,8 @@ class ChatController extends ChangeNotifier {
     _callRemoteDescriptionSet = false;
     _pendingOfferSdp = null;
     _pendingIce.clear();
+    _callMuted = false;
+    _pttHeld = false;
     _notify();
     if (transport == null) return;
     try {
