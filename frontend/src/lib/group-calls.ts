@@ -84,6 +84,9 @@ function stopTracks(stream: MediaStream | null): void {
 export function createGroupCallController(deps: GroupCallControllerDeps): GroupCallController {
   const peers = new Map<string, PeerEntry>();
   const pendingIce = new Map<string, RTCIceCandidateInit[]>();
+  // Peers that announced themselves while our roster was still in flight.
+  // They are absent from that snapshot, so we offer to them on activation.
+  const lateJoiners = new Set<string>();
   let phase: GroupCallPhase = 'idle';
   let groupId: string | null = null;
   let topology: CallTopology = 'mesh';
@@ -115,12 +118,14 @@ export function createGroupCallController(deps: GroupCallControllerDeps): GroupC
     entry.pc?.close();
     peers.delete(userId);
     pendingIce.delete(userId);
+    lateJoiners.delete(userId);
   };
 
   const clearResources = (): void => {
     for (const entry of peers.values()) entry.pc?.close();
     peers.clear();
     pendingIce.clear();
+    lateJoiners.clear();
     stopTracks(localStream);
     localStream = null;
     mediaPromise = null;
@@ -178,7 +183,9 @@ export function createGroupCallController(deps: GroupCallControllerDeps): GroupC
         if (groupId === null) return;
         deps.emit(EVENTS.CLIENT.GROUP_CALL_ICE, {
           groupId,
-          to: entry.userId,
+          // The server resolves `to` with getUserByUsername, so the wire value
+          // must be the username rather than the opaque userId.
+          to: entry.username,
           candidate: JSON.stringify(candidate),
         });
       },
@@ -217,7 +224,7 @@ export function createGroupCallController(deps: GroupCallControllerDeps): GroupC
       await pc.setLocalDescription(offer);
       deps.emit(EVENTS.CLIENT.GROUP_CALL_OFFER, {
         groupId,
-        to: entry.userId,
+        to: entry.username,
         sdp: offer.sdp ?? '',
       });
     } catch {
@@ -252,6 +259,14 @@ export function createGroupCallController(deps: GroupCallControllerDeps): GroupC
         existing ?? { userId: peer.userId, username: peer.username, pc: null, stream: null },
       );
     }
+    // Peers that joined while this roster was in flight are not part of the
+    // snapshot; keep them so the offer pass below reaches them.
+    const pendingOffers = Array.from(lateJoiners);
+    lateJoiners.clear();
+    for (const userId of pendingOffers) {
+      const existing = peers.get(userId);
+      if (existing !== undefined) next.set(userId, existing);
+    }
     for (const [userId, entry] of peers) {
       if (!next.has(userId)) entry.pc?.close();
     }
@@ -262,7 +277,15 @@ export function createGroupCallController(deps: GroupCallControllerDeps): GroupC
     notify();
     // The roster means the server accepted the join. Existing participants
     // need a local stream before they can offer to anyone.
-    if (topology === 'mesh') void ensureLocalStream();
+    if (topology === 'mesh') {
+      void ensureLocalStream();
+      // Two clients can join inside one round trip: the later joiner is absent
+      // from this snapshot, so offer to them now that we are active.
+      for (const userId of pendingOffers) {
+        const entry = peers.get(userId);
+        if (entry !== undefined) void offerTo(entry);
+      }
+    }
   };
 
   const joined = async (payload: GroupCallJoinedPayload): Promise<void> => {
@@ -283,7 +306,13 @@ export function createGroupCallController(deps: GroupCallControllerDeps): GroupC
 
     // Only an existing participant in an active mesh call offers. Joiners
     // stay passive and answer the offers they receive.
-    if (phase !== 'active' || topology !== 'mesh') return;
+    if (topology !== 'mesh') return;
+    if (phase !== 'active') {
+      // Our roster has not landed yet, so it cannot list this peer. Remember
+      // them and offer as soon as the server activates the call.
+      if (phase === 'joining') lateJoiners.add(payload.from);
+      return;
+    }
     await offerTo(entry);
   };
 
@@ -317,7 +346,7 @@ export function createGroupCallController(deps: GroupCallControllerDeps): GroupC
       await pc.setLocalDescription(answer);
       deps.emit(EVENTS.CLIENT.GROUP_CALL_ANSWER, {
         groupId,
-        to: entry.userId,
+        to: entry.username,
         sdp: answer.sdp ?? '',
       });
     } catch {

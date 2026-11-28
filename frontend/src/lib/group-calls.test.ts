@@ -126,7 +126,7 @@ test('mesh join emits group_call:join and the roster activates the call', () => 
     h.emitted.map((entry) => entry.event),
     ['group_call:join'],
   );
-  assert.equal(eventPayload(h, 'group_call:join')['groupId'], 'g1');
+  assert.equal(eventPayload(h, 'group_call:join').groupId, 'g1');
   assert.equal(lastSnapshot(h).state, 'joining');
 
   h.controller.roster({ groupId: 'g1', peers: [{ userId: 'u2', username: 'bob' }] });
@@ -147,8 +147,26 @@ test('an existing participant offers to a joiner on group_call:joined', async ()
 
   assert.equal(h.pcs.length, 1);
   assert.ok(h.pcs[0]?.tracks.length === 2, 'local tracks are added before the offer');
-  assert.equal(eventPayload(h, 'group_call:offer')['to'], 'u2');
-  assert.equal(eventPayload(h, 'group_call:offer')['sdp'], 'offer-sdp');
+  assert.equal(eventPayload(h, 'group_call:offer').to, 'bob');
+  assert.equal(eventPayload(h, 'group_call:offer').sdp, 'offer-sdp');
+});
+
+test('a peer that joins while our roster is in flight still gets an offer', async () => {
+  const h = harness();
+  h.controller.join('g1', 'mesh');
+  assert.equal(lastSnapshot(h).state, 'joining');
+
+  // Simultaneous join: this peer is not in the roster the server is about to
+  // send us, so it must be remembered and offered to on activation.
+  await h.controller.joined({ groupId: 'g1', from: 'u2', fromUsername: 'bob' });
+  assert.equal(h.pcs.length, 0, 'joiners stay passive until activated');
+
+  h.controller.roster({ groupId: 'g1', peers: [] });
+  await tick();
+
+  assert.equal(h.pcs.length, 1);
+  assert.equal(eventPayload(h, 'group_call:offer').to, 'bob');
+  assert.equal(lastSnapshot(h).peers.length, 1);
 });
 
 test('a joiner answers an offer instead of offering back', async () => {
@@ -165,8 +183,8 @@ test('a joiner answers an offer instead of offering back', async () => {
 
   assert.equal(h.pcs.length, 1);
   assert.equal(h.pcs[0]?.remoteDescription?.type, 'offer');
-  assert.equal(eventPayload(h, 'group_call:answer')['to'], 'u2');
-  assert.equal(eventPayload(h, 'group_call:answer')['sdp'], 'answer-sdp');
+  assert.equal(eventPayload(h, 'group_call:answer').to, 'bob');
+  assert.equal(eventPayload(h, 'group_call:answer').sdp, 'answer-sdp');
   assert.ok(
     !h.emitted.some((entry) => entry.event === 'group_call:offer'),
     'the joiner must never offer',
@@ -197,6 +215,19 @@ test('ICE is queued per peer until the remote description is set', async () => {
   assert.deepEqual(h.pcs[0]?.candidates, [{ candidate: 'early' }]);
 });
 
+test('ICE candidates are addressed to the peer username', async () => {
+  const h = harness();
+  h.controller.join('g1', 'mesh');
+  h.controller.roster({ groupId: 'g1', peers: [] });
+  await h.controller.joined({ groupId: 'g1', from: 'u2', fromUsername: 'bob' });
+
+  // The server resolves `to` with getUserByUsername, so a userId here would
+  // silently drop every candidate.
+  h.pcs[0]?.handlers.onIceCandidate?.({ candidate: 'c1' });
+  assert.equal(eventPayload(h, 'group_call:ice').to, 'bob');
+  assert.equal(eventPayload(h, 'group_call:ice').candidate, '{"candidate":"c1"}');
+});
+
 test('leave closes every peer connection, stops capture and emits leave', async () => {
   const h = harness();
   h.controller.join('g1', 'mesh');
@@ -208,7 +239,7 @@ test('leave closes every peer connection, stops capture and emits leave', async 
 
   assert.equal(h.pcs[0]?.closed, true);
   assert.equal(h.allStopped(), true);
-  assert.equal(eventPayload(h, 'group_call:leave')['groupId'], 'g1');
+  assert.equal(eventPayload(h, 'group_call:leave').groupId, 'g1');
   assert.equal(lastSnapshot(h).state, 'idle');
   assert.deepEqual(lastSnapshot(h).peers, []);
 });
