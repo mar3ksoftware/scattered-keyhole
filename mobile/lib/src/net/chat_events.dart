@@ -24,8 +24,17 @@ abstract final class ChatEvents {
   static const pollVote = 'poll:vote';
   static const pollClose = 'poll:close';
   static const groupUpdate = 'group:update';
+  static const groupTopology = 'group:topology';
   static const messagePin = 'message:pin';
   static const disappearingSet = 'disappearing:set';
+
+  // Group calls (mesh signaling + SFU token request).
+  static const groupCallJoin = 'group_call:join';
+  static const groupCallLeave = 'group_call:leave';
+  static const groupCallOffer = 'group_call:offer';
+  static const groupCallAnswer = 'group_call:answer';
+  static const groupCallIce = 'group_call:ice';
+  static const groupCallSfuToken = 'group_call:sfu_token';
 
   // Call signaling (Tier-8a) uses the same event names in both directions;
   // the server relays each one with `from`/`fromUsername` attached.
@@ -65,6 +74,10 @@ abstract final class ChatEvents {
   static const pollVoted = 'poll:voted';
   static const pollClosed = 'poll:closed';
   static const groupUpdated = 'group:updated';
+  static const groupCallRoster = 'group_call:roster';
+  static const groupCallJoined = 'group_call:joined';
+  static const groupCallLeft = 'group_call:left';
+  static const groupCallSfuCredentials = 'group_call:sfu_credentials';
   static const messagePinned = 'message:pinned';
   static const disappearingChanged = 'disappearing:changed';
   static const notice = 'notice';

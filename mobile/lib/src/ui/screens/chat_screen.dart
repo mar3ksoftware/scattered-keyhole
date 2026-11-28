@@ -16,6 +16,7 @@ import '../widgets/call_overlay.dart';
 import '../widgets/connection_status.dart';
 import '../widgets/conversation_settings_sheet.dart';
 import '../widgets/edit_group_modal.dart';
+import '../widgets/group_call_overlay.dart';
 import '../widgets/group_members_sheet.dart';
 import '../widgets/message_bubble.dart';
 import '../widgets/message_composer.dart';
@@ -353,12 +354,21 @@ class _ChatScreenState extends State<ChatScreen> {
         final callPeer = _controller.callPeer;
         final callActive =
             callState == CallState.calling || callState == CallState.connected;
+        final groupCallState = _controller.groupCallState;
+        final groupCallActive = groupCallState != GroupCallState.idle;
+        final groupCallHere =
+            groupCallActive && group?.groupId == _controller.groupCallId;
         return PopScope(
           // System back hangs up first: leaving the screen mid-call would
           // otherwise strand the peer with a dead connection.
-          canPop: !callActive,
+          canPop: !callActive && !groupCallHere,
           onPopInvokedWithResult: (didPop, _) {
-            if (!didPop && callActive) _controller.endCall();
+            if (didPop) return;
+            if (callActive) {
+              _controller.endCall();
+            } else if (groupCallHere) {
+              _controller.leaveGroupCall();
+            }
           },
           child: SafeArea(
             child: Column(
@@ -401,6 +411,14 @@ class _ChatScreenState extends State<ChatScreen> {
                                       ),
                                     )
                                 : null,
+                            topology: group?.topology,
+                            onTopology: group != null &&
+                                    (group.isAdmin(_controller.me?.username))
+                                ? (next) => _controller.setGroupTopology(
+                                      group.groupId,
+                                      next,
+                                    )
+                                : null,
                           );
                           if (seconds != null && context.mounted) {
                             final k = conversationKeyFor(target);
@@ -423,6 +441,18 @@ class _ChatScreenState extends State<ChatScreen> {
                     CallState.connected => 'In call',
                     _ => null,
                   },
+                  onStartGroupCall: group != null &&
+                          !groupCallActive &&
+                          callState == CallState.idle
+                      ? () => _controller.joinGroupCall(group.groupId)
+                      : null,
+                  groupCallActive: groupCallHere,
+                  groupCallLabel: !groupCallHere
+                      ? null
+                      : groupCallState == GroupCallState.joining
+                          ? 'Joining…'
+                          : 'Call · ${_controller.groupCallParticipants.length + 1}',
+                  onLeaveGroupCall: _controller.leaveGroupCall,
                 ),
                 if (callState == CallState.incoming && callPeer != null)
                   IncomingCallBanner(
@@ -552,6 +582,18 @@ class _ChatScreenState extends State<ChatScreen> {
                             onEnd: _controller.endCall,
                           ),
                         ),
+                      if (groupCallHere)
+                        Positioned.fill(
+                          child: GroupCallOverlay(
+                            state: groupCallState,
+                            topology: _controller.groupCallTopology,
+                            participants: _controller.groupCallParticipants,
+                            transportFor: _controller.groupCallTransportFor,
+                            localStream: _controller.groupCallLocalStream,
+                            sfu: _controller.groupCallSfu,
+                            onLeave: _controller.leaveGroupCall,
+                          ),
+                        ),
                     ],
                   ),
                 ),
@@ -576,6 +618,10 @@ class _ChatHeader extends StatelessWidget {
     this.onSettings,
     this.onCall,
     this.callLabel,
+    this.onStartGroupCall,
+    this.groupCallActive = false,
+    this.groupCallLabel,
+    this.onLeaveGroupCall,
   });
 
   final String title;
@@ -593,6 +639,18 @@ class _ChatHeader extends StatelessWidget {
   /// Compact call status ("Calling…", "In call") that replaces the call
   /// button once signaling has started.
   final String? callLabel;
+
+  /// Starts a group call in the open group; null while one is already up.
+  final VoidCallback? onStartGroupCall;
+
+  /// Whether the open group's call is joining/active.
+  final bool groupCallActive;
+
+  /// Compact group-call status ("Joining…", "Call · N").
+  final String? groupCallLabel;
+
+  /// Leaves the active group call from the header.
+  final VoidCallback? onLeaveGroupCall;
 
   @override
   Widget build(BuildContext context) {
@@ -666,6 +724,32 @@ class _ChatHeader extends StatelessWidget {
                 onPressed: onCall,
                 icon: const Icon(
                   Icons.call_outlined,
+                  size: 22,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+            if (groupCallActive)
+              TextButton(
+                key: const Key('leave-group-call'),
+                onPressed: onLeaveGroupCall,
+                style: TextButton.styleFrom(
+                  foregroundColor: AppColors.dangerSoft,
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: Text(groupCallLabel ?? 'Leave call'),
+              )
+            else if (onStartGroupCall != null)
+              IconButton(
+                key: const Key('start-group-call'),
+                tooltip: 'Start group call',
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                onPressed: onStartGroupCall,
+                icon: const Icon(
+                  Icons.video_call_outlined,
                   size: 22,
                   color: AppColors.textSecondary,
                 ),

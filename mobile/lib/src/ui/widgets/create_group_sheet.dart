@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../models/models.dart';
 import '../../state/chat_controller.dart';
 import '../../utils/group_meta.dart';
 import '../theme/app_theme.dart';
@@ -33,6 +34,7 @@ class _CreateGroupSheetState extends State<CreateGroupSheet> {
   final TextEditingController _descriptionController = TextEditingController();
   final Set<String> _selected = <String>{};
   bool _persistent = false;
+  String _topology = CallTopology.mesh;
 
   @override
   void dispose() {
@@ -58,7 +60,12 @@ class _CreateGroupSheetState extends State<CreateGroupSheet> {
   void _submit() {
     final name = _nameController.text.trim();
     if (name.isEmpty || _selected.isEmpty) return;
-    widget.controller.createGroup(name, _selected.toList(growable: false), persistent: _persistent);
+    widget.controller.createGroup(
+      name,
+      _selected.toList(growable: false),
+      persistent: _persistent,
+      topology: _topology,
+    );
     Navigator.of(context).pop();
   }
 
@@ -169,6 +176,35 @@ class _CreateGroupSheetState extends State<CreateGroupSheet> {
                   ),
                   const SizedBox(height: 14),
                   const Text(
+                    'CALL TOPOLOGY',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.8,
+                      color: AppColors.textMuted,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  _TopologyOption(
+                    optionKey: const Key('topology-mesh'),
+                    label: 'Mesh (up to 6)',
+                    helper:
+                        'Everyone connects directly to everyone. Strongest privacy — the server never sees your media.',
+                    selected: _topology == CallTopology.mesh,
+                    onTap: () =>
+                        setState(() => _topology = CallTopology.mesh),
+                  ),
+                  const SizedBox(height: 8),
+                  _TopologyOption(
+                    optionKey: const Key('topology-sfu'),
+                    label: 'SFU (larger, less private)',
+                    helper:
+                        'The server forwards audio and video between participants. Larger calls, but the server can see your media.',
+                    selected: _topology == CallTopology.sfu,
+                    onTap: () => setState(() => _topology = CallTopology.sfu),
+                  ),
+                  const SizedBox(height: 14),
+                  const Text(
                     'MEMBERS',
                     style: TextStyle(
                       fontSize: 11,
@@ -236,6 +272,78 @@ class _CreateGroupSheetState extends State<CreateGroupSheet> {
               ),
             );
           },
+        ),
+      ),
+    );
+  }
+}
+
+/// Selectable card for one call topology, with the frozen helper copy.
+class _TopologyOption extends StatelessWidget {
+  const _TopologyOption({
+    required this.optionKey,
+    required this.label,
+    required this.helper,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final Key optionKey;
+  final String label;
+  final String helper;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      key: optionKey,
+      borderRadius: BorderRadius.circular(10),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: selected ? AppColors.surfaceAlt : Colors.transparent,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: selected ? AppColors.accentSoft : AppColors.border,
+          ),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(
+              selected
+                  ? Icons.radio_button_checked
+                  : Icons.radio_button_unchecked,
+              size: 18,
+              color: selected ? AppColors.accentSoft : AppColors.textMuted,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    helper,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: AppColors.textMuted,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );

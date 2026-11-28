@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:scattered_keyhole/main.dart';
 import 'package:scattered_keyhole/src/calls/call_transport.dart';
+import 'package:scattered_keyhole/src/calls/sfu_transport.dart';
 import 'package:scattered_keyhole/src/crypto/e2ee_session.dart';
 import 'package:scattered_keyhole/src/models/models.dart';
 import 'package:scattered_keyhole/src/net/chat_events.dart';
@@ -216,6 +217,34 @@ class FakeSocketService implements SocketService {
   @override
   void sendCallReject(CallEndPayload payload) =>
       _record(ChatEvents.callReject, payload);
+
+  @override
+  void sendGroupTopology(GroupTopologyPayload payload) =>
+      _record(ChatEvents.groupTopology, payload);
+
+  @override
+  void sendGroupCallJoin(GroupCallJoinPayload payload) =>
+      _record(ChatEvents.groupCallJoin, payload);
+
+  @override
+  void sendGroupCallLeave(GroupCallLeavePayload payload) =>
+      _record(ChatEvents.groupCallLeave, payload);
+
+  @override
+  void sendGroupCallOffer(GroupCallOfferPayload payload) =>
+      _record(ChatEvents.groupCallOffer, payload);
+
+  @override
+  void sendGroupCallAnswer(GroupCallAnswerPayload payload) =>
+      _record(ChatEvents.groupCallAnswer, payload);
+
+  @override
+  void sendGroupCallIce(GroupCallIcePayload payload) =>
+      _record(ChatEvents.groupCallIce, payload);
+
+  @override
+  void sendGroupCallSfuToken(GroupCallSfuTokenPayload payload) =>
+      _record(ChatEvents.groupCallSfuToken, payload);
 
   // ── Inbound ────────────────────────────────────────────────────────────
 
@@ -486,6 +515,65 @@ class FakeSocketService implements SocketService {
     });
   }
 
+  @override
+  Unsubscribe onGroupCallRoster(
+    void Function(GroupCallRosterPayload payload) handler,
+  ) {
+    return _register(ChatEvents.groupCallRoster, (data) {
+      handler(data! as GroupCallRosterPayload);
+    });
+  }
+
+  @override
+  Unsubscribe onGroupCallJoined(
+    void Function(GroupCallJoinedPayload payload) handler,
+  ) {
+    return _register(ChatEvents.groupCallJoined, (data) {
+      handler(data! as GroupCallJoinedPayload);
+    });
+  }
+
+  @override
+  Unsubscribe onGroupCallLeft(
+    void Function(GroupCallLeftPayload payload) handler,
+  ) {
+    return _register(ChatEvents.groupCallLeft, (data) {
+      handler(data! as GroupCallLeftPayload);
+    });
+  }
+
+  @override
+  Unsubscribe onGroupCallOffer(void Function(GroupCallOfferRelay relay) handler) {
+    return _register(ChatEvents.groupCallOffer, (data) {
+      handler(data! as GroupCallOfferRelay);
+    });
+  }
+
+  @override
+  Unsubscribe onGroupCallAnswer(
+    void Function(GroupCallAnswerRelay relay) handler,
+  ) {
+    return _register(ChatEvents.groupCallAnswer, (data) {
+      handler(data! as GroupCallAnswerRelay);
+    });
+  }
+
+  @override
+  Unsubscribe onGroupCallIce(void Function(GroupCallIceRelay relay) handler) {
+    return _register(ChatEvents.groupCallIce, (data) {
+      handler(data! as GroupCallIceRelay);
+    });
+  }
+
+  @override
+  Unsubscribe onGroupCallSfuCredentials(
+    void Function(SfuCredentialsPayload payload) handler,
+  ) {
+    return _register(ChatEvents.groupCallSfuCredentials, (data) {
+      handler(data! as SfuCredentialsPayload);
+    });
+  }
+
   // ── Connection lifecycle listeners ─────────────────────────────────────
 
   @override
@@ -612,6 +700,7 @@ GroupInfo groupInfo({
 ChatController makeController(
   FakeSocketService fake, {
   CallTransport Function()? callTransportFactory,
+  SfuTransport Function()? sfuTransportFactory,
 }) {
   return ChatController(
     socket: fake,
@@ -619,6 +708,7 @@ ChatController makeController(
     errorClearDelay: const Duration(days: 1),
     sharedKeyTimeoutMs: 50,
     callTransportFactory: callTransportFactory,
+    sfuTransportFactory: sfuTransportFactory,
   );
 }
 

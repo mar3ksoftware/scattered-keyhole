@@ -129,6 +129,27 @@ abstract interface class SocketService {
   /// `call:reject` — decline an incoming call.
   void sendCallReject(CallEndPayload payload);
 
+  /// `group:topology` — admin-only switch of a room's call topology.
+  void sendGroupTopology(GroupTopologyPayload payload);
+
+  /// `group_call:join` — enter a mesh group call.
+  void sendGroupCallJoin(GroupCallJoinPayload payload);
+
+  /// `group_call:leave` — leave the current mesh group call.
+  void sendGroupCallLeave(GroupCallLeavePayload payload);
+
+  /// `group_call:offer` — offer to one mesh call peer.
+  void sendGroupCallOffer(GroupCallOfferPayload payload);
+
+  /// `group_call:answer` — answer one mesh call peer's offer.
+  void sendGroupCallAnswer(GroupCallAnswerPayload payload);
+
+  /// `group_call:ice` — relay one ICE candidate to a mesh call peer.
+  void sendGroupCallIce(GroupCallIcePayload payload);
+
+  /// `group_call:sfu_token` — ask for LiveKit credentials for an SFU room.
+  void sendGroupCallSfuToken(GroupCallSfuTokenPayload payload);
+
   // ── Inbound: server -> client ──────────────────────────────────────────
 
   /// `user:joined` — a user (possibly us) joined; broadcast to everyone.
@@ -247,6 +268,27 @@ abstract interface class SocketService {
 
   /// `call:reject` — the peer declined our call.
   Unsubscribe onCallReject(void Function(CallEndRelay relay) handler);
+
+  /// `group_call:roster` — peers already in a mesh call when we join.
+  Unsubscribe onGroupCallRoster(void Function(GroupCallRosterPayload payload) handler);
+
+  /// `group_call:joined` — someone entered our mesh call.
+  Unsubscribe onGroupCallJoined(void Function(GroupCallJoinedPayload payload) handler);
+
+  /// `group_call:left` — someone (possibly us) left the mesh call.
+  Unsubscribe onGroupCallLeft(void Function(GroupCallLeftPayload payload) handler);
+
+  /// `group_call:offer` — a peer offers us a mesh peer connection.
+  Unsubscribe onGroupCallOffer(void Function(GroupCallOfferRelay relay) handler);
+
+  /// `group_call:answer` — a peer answered our mesh offer.
+  Unsubscribe onGroupCallAnswer(void Function(GroupCallAnswerRelay relay) handler);
+
+  /// `group_call:ice` — one ICE candidate from a mesh call peer.
+  Unsubscribe onGroupCallIce(void Function(GroupCallIceRelay relay) handler);
+
+  /// `group_call:sfu_credentials` — LiveKit URL + token for an SFU room.
+  Unsubscribe onGroupCallSfuCredentials(void Function(SfuCredentialsPayload payload) handler);
 
   // ── Connection lifecycle listeners ─────────────────────────────────────
 
@@ -451,6 +493,41 @@ class IoSocketService implements SocketService {
   @override
   void sendCallReject(CallEndPayload payload) {
     _socket.emit(ChatEvents.callReject, payload.toJson());
+  }
+
+  @override
+  void sendGroupTopology(GroupTopologyPayload payload) {
+    _socket.emit(ChatEvents.groupTopology, payload.toJson());
+  }
+
+  @override
+  void sendGroupCallJoin(GroupCallJoinPayload payload) {
+    _socket.emit(ChatEvents.groupCallJoin, payload.toJson());
+  }
+
+  @override
+  void sendGroupCallLeave(GroupCallLeavePayload payload) {
+    _socket.emit(ChatEvents.groupCallLeave, payload.toJson());
+  }
+
+  @override
+  void sendGroupCallOffer(GroupCallOfferPayload payload) {
+    _socket.emit(ChatEvents.groupCallOffer, payload.toJson());
+  }
+
+  @override
+  void sendGroupCallAnswer(GroupCallAnswerPayload payload) {
+    _socket.emit(ChatEvents.groupCallAnswer, payload.toJson());
+  }
+
+  @override
+  void sendGroupCallIce(GroupCallIcePayload payload) {
+    _socket.emit(ChatEvents.groupCallIce, payload.toJson());
+  }
+
+  @override
+  void sendGroupCallSfuToken(GroupCallSfuTokenPayload payload) {
+    _socket.emit(ChatEvents.groupCallSfuToken, payload.toJson());
   }
 
   // ── Inbound ────────────────────────────────────────────────────────────
@@ -727,6 +804,55 @@ class IoSocketService implements SocketService {
   Unsubscribe onCallReject(void Function(CallEndRelay relay) handler) {
     return _on(ChatEvents.callReject, (data) {
       handler(CallEndRelay.fromJson(asJsonMap(data)));
+    });
+  }
+
+  @override
+  Unsubscribe onGroupCallRoster(void Function(GroupCallRosterPayload payload) handler) {
+    return _on(ChatEvents.groupCallRoster, (data) {
+      handler(GroupCallRosterPayload.fromJson(asJsonMap(data)));
+    });
+  }
+
+  @override
+  Unsubscribe onGroupCallJoined(void Function(GroupCallJoinedPayload payload) handler) {
+    return _on(ChatEvents.groupCallJoined, (data) {
+      handler(GroupCallJoinedPayload.fromJson(asJsonMap(data)));
+    });
+  }
+
+  @override
+  Unsubscribe onGroupCallLeft(void Function(GroupCallLeftPayload payload) handler) {
+    return _on(ChatEvents.groupCallLeft, (data) {
+      handler(GroupCallLeftPayload.fromJson(asJsonMap(data)));
+    });
+  }
+
+  @override
+  Unsubscribe onGroupCallOffer(void Function(GroupCallOfferRelay relay) handler) {
+    return _on(ChatEvents.groupCallOffer, (data) {
+      handler(GroupCallOfferRelay.fromJson(asJsonMap(data)));
+    });
+  }
+
+  @override
+  Unsubscribe onGroupCallAnswer(void Function(GroupCallAnswerRelay relay) handler) {
+    return _on(ChatEvents.groupCallAnswer, (data) {
+      handler(GroupCallAnswerRelay.fromJson(asJsonMap(data)));
+    });
+  }
+
+  @override
+  Unsubscribe onGroupCallIce(void Function(GroupCallIceRelay relay) handler) {
+    return _on(ChatEvents.groupCallIce, (data) {
+      handler(GroupCallIceRelay.fromJson(asJsonMap(data)));
+    });
+  }
+
+  @override
+  Unsubscribe onGroupCallSfuCredentials(void Function(SfuCredentialsPayload payload) handler) {
+    return _on(ChatEvents.groupCallSfuCredentials, (data) {
+      handler(SfuCredentialsPayload.fromJson(asJsonMap(data)));
     });
   }
 

@@ -15,6 +15,8 @@ Future<int?> showConversationSettingsSheet(
   bool disabled = false,
   bool canEditGroup = false,
   VoidCallback? onEditGroup,
+  String? topology,
+  void Function(String topology)? onTopology,
   ChatController? controller,
   ConversationTarget? target,
   GroupInfo? group,
@@ -52,6 +54,8 @@ Future<int?> showConversationSettingsSheet(
                   Navigator.of(sheetContext).pop();
                   resolvedEdit();
                 },
+          topology: topology,
+          onTopology: onTopology,
           onSelect: (seconds) => Navigator.of(sheetContext).pop(seconds),
         ),
       );

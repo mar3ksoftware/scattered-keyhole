@@ -35,7 +35,10 @@ abstract interface class CallTransport {
   });
 
   /// Adds every local track to the peer connection.
-  Future<void> addTracks();
+  ///
+  /// [stream] overrides the transport's own capture stream; group calls
+  /// capture once and share that stream across every peer connection.
+  Future<void> addTracks({webrtc.MediaStream? stream});
 
   /// Creates a local offer and returns its SDP.
   Future<String> createOffer();
@@ -119,12 +122,12 @@ class WebRtcCallTransport implements CallTransport {
   }
 
   @override
-  Future<void> addTracks() async {
+  Future<void> addTracks({webrtc.MediaStream? stream}) async {
     final pc = _pc;
-    final stream = _localStream;
-    if (pc == null || stream == null) return;
-    for (final track in stream.getTracks()) {
-      await pc.addTrack(track, stream);
+    final source = stream ?? _localStream;
+    if (pc == null || source == null) return;
+    for (final track in source.getTracks()) {
+      await pc.addTrack(track, source);
     }
   }
 
