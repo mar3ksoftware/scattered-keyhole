@@ -43,6 +43,9 @@ Projekt sklada sie z trzech czesci: backendu na Bun (port 3000), aplikacji webow
 - **Zero trwalosci czatu.** Ani localStorage, ani cookies, ani serwerowej pamieci wiadomosci.
 - **Ograniczanie zapytan.** Token bucket, 10 zapytan/s na socket.
 - **Interfejs responsywny.** Na desktopie panel dzielony, na urzadzeniach mobilnych widoki ulozone pod soba; ciemny motyw glass.
+- **Polaczenia 1:1 glos/wideo.** Polaczenia WebRTC z E2EE, wyciszanie mikrofonu, ustawienia audio.
+- **Polaczenia grupowe.** Mesh (do 6 uczestnikow, najwyzsza prywatnosc) lub SFU (LiveKit, wieksze pokoje, mniejsza prywatnosc); topologie wybiera administrator grupy przy tworzeniu i moze ja zmienic pozniej.
+- **Ustawienia audio.** Bitrate Opus (voice 32 kbps / music 128 kbps), przelaczniki echo/szum/wzmocnienie, wybor urzadzen wejscia/wyjscia, push-to-talk i push-to-mute z przypisywalnymi klawiszami.
 
 ## Konfiguracja
 
@@ -318,6 +321,12 @@ Scattered Keyhole/
 | `src/components/ChatArea.tsx` | Lista wiadomosci, pole wprowadzania i naglowek |
 | `src/components/MessageBubble.tsx` | Pojedyncza wiadomosc ze statusem E2EE |
 | `src/components/UserItem.tsx` | Klikalny wiersz uzytkownika |
+| `src/lib/calls.ts` | Pomocniki polaczen WebRTC i getUserMedia |
+| `src/lib/group-calls.ts` | Kontroler polaczen grupowych (mesh + SFU przez LiveKit) |
+| `src/lib/sfu-call.ts` | Most do pokoju LiveKit dla polaczen SFU |
+| `src/lib/audioSettings.ts` | Preferencje audio, ograniczenia, bitrate, kontroler PTT/PTM |
+| `src/components/AudioSettingsPanel.tsx` | Modal ustawien audio i przechwytywanie urzadzen/klawiszy |
+| `src/components/CallMuteButton.tsx` | Przelacznik mikrofonu w polaczeniu 1:1 |
 
 ### Moduly aplikacji mobilnej (`mobile/`)
 
@@ -335,6 +344,12 @@ Scattered Keyhole/
 | `lib/src/crypto/e2ee_session.dart` | Zarzadzanie kluczami wspoldzielonymi dla kazdego peera |
 | `lib/src/crypto/media_crypto.dart` | Szyfrowanie pojedynczego pliku (klucz pliku + IV, SHA-256) |
 | `lib/src/models/` | Modele protokolu: user, group, message, media, poll, auth, errors |
+| `lib/src/calls/call_transport.dart` | Interfejs transportu WebRTC i implementacja flutter_webrtc |
+| `lib/src/calls/sfu_transport.dart` | Most do pokoju LiveKit dla polaczen SFU |
+| `lib/src/state/audio_settings.dart` | Preferencje audio, ograniczenia, bitrate, formatowanie klawiszy |
+| `lib/src/ui/widgets/call_overlay.dart` | Powierzchnia polaczenia 1:1 z wyciszaniem i przytrzymaniem |
+| `lib/src/ui/widgets/group_call_overlay.dart` | Powierzchnia polaczenia grupowego (mesh + SFU) |
+| `lib/src/ui/widgets/audio_settings_sheet.dart` | Dolny arkusz ustawien audio |
 | `lib/src/utils/` | Czyste helpery decyzyjne: exp w kopercie, przypinanie, usuwanie wygaslych, timer, metadane grup, klucze rozmow |
 | `lib/src/ui/` | Ekrany (logowanie, powloka czatu, lista rozmow) i widgety |
 
